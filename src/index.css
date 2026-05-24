@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+@theme {
+  --color-dark-bg: #f5f7fa; /* 极简现代浅灰背景 */
+  --color-dark-card: rgba(255, 255, 255, 0.85); /* 晶莹透亮玻璃卡片 */
+  --color-dark-surface: #edf1f7; /* 二级微灰表面 */
+  --color-dark-text: #0f172a; /* 主要深石板灰文字 */
+  --color-dark-muted: #64748b; /* 优雅烟灰文字 */
+  
+  --color-brand-cyan: #0284c7; /* 湖光蓝色 */
+  --color-brand-purple: #4f46e5; /* 经典靛蓝 */
+  --color-brand-blue: #2563eb; /* 蔚深蓝色 */
+  --color-brand-neon: #7c3aed; /* 亮罗兰紫 */
+  --color-brand-rose: #e11d48; /* 玫瑰雅红 */
+  --color-brand-orange: #d97706; /* 琥珀蜜橙 */
+  --color-brand-success: #059669; /* 翡翠碧绿 */
+
+  --animate-pulse-glow: pulseGlow 2s infinite;
+  --animate-fade-in: fadeIn 0.3s ease-out forwards;
+  --animate-slide-up: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+
+  @keyframes pulseGlow {
+    0%, 100% {
+      opacity: 0.8;
+      box-shadow: 0 0 15px rgba(79, 70, 229, 0.1);
+    }
+    50% {
+      opacity: 1;
+      box-shadow: 0 0 25px rgba(79, 70, 229, 0.25);
+    }
+  }
+  @keyframes fadeIn {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+  @keyframes slideUp {
+    0% { transform: translateY(16px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-dark-bg text-dark-text antialiased selection:bg-brand-purple/20 selection:text-brand-purple;
+    font-family: 'Inter', 'Outfit', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* 晶莹浅色玻璃卡片样式 (Glassmorphism Light) */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 4px 30px rgba(15, 23, 42, 0.03);
+}
+
+.glass-panel-light {
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(15, 23, 42, 0.04);
+}
+
+.glass-panel-heavy {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 40px -10px rgba(15, 23, 42, 0.08);
+}
+
+/* 霓虹发光与微光 */
+.neon-border-glow {
+  box-shadow: 0 0 15px rgba(79, 70, 229, 0.08), inset 0 0 15px rgba(79, 70, 229, 0.03);
+}
+
+.neon-border-glow-purple {
+  box-shadow: 0 0 15px rgba(124, 58, 237, 0.08), inset 0 0 15px rgba(124, 58, 237, 0.03);
+}
+
+.neon-text-glow {
+  text-shadow: 0 0 8px rgba(79, 70, 229, 0.2);
+}
+
+.radial-bg-glow {
+  background: radial-gradient(circle at 50% -20%, rgba(99, 102, 241, 0.08) 0%, rgba(2, 132, 199, 0.03) 50%, #f5f7fa 80%);
+}
+
+/* 无滚动条滚动区 */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* 输入法聚焦呼吸光效果 */
+.ai-pulse-glow:focus-within {
+  animation: pulseGlow 2s infinite;
+  border-color: rgba(79, 70, 229, 0.35);
+}
