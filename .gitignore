@@ -11,6 +11,9 @@ node_modules
 dist
 dist-ssr
 coverage
+.tmp-test
+.tmp-test-cjs
+testphoto
 *.local
 .env
 .env.*

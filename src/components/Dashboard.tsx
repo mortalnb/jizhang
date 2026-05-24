@@ -1,350 +1,455 @@
-import React, { useEffect, useState } from 'react';
-import { db, Transaction } from '../utils/db';
-import { CATEGORY_EMOJIS, CATEGORY_COLORS } from '../utils/ai';
+import { useEffect, useMemo, useState } from 'react';
+import { AlertCircle, Calendar, ChartPie, Loader2, ShieldCheck, Sparkles, TrendingUp, X } from 'lucide-react';
+import { CATEGORY_COLORS, getCategoryEmoji, getCategoryGradient } from '../data/categories';
+import { formatShortDate, monthKey, todayISO } from '../services/date';
+import { buildLocalInsights, generateFinancialInsights, type InsightResult } from '../services/financialInsights';
+import { storage } from '../services/storage';
+import type { Transaction } from '../types';
 
-import { Sparkles, TrendingUp, TrendingDown, AlertCircle, Calendar, ShieldCheck } from 'lucide-react';
+type DashboardView = 'overview' | 'category' | 'calendar';
 
-export const Dashboard: React.FC = () => {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [budget, setBudget] = useState(3000);
+const PIE_COLORS = ['#4f46e5', '#0284c7', '#059669', '#d97706', '#e11d48', '#7c3aed', '#0f766e', '#64748b'];
+
+export function Dashboard() {
+  const [view, setView] = useState<DashboardView>('overview');
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  const transactions = useMemo(() => storage.getTransactions(), []);
+  const settings = useMemo(() => storage.getSettings(), []);
+  const budget = settings.monthlyBudget;
+  const [insightResult, setInsightResult] = useState<InsightResult>(() => buildLocalInsights(transactions, budget));
+
+  const currentMonth = todayISO().slice(0, 7);
+  const monthTransactions = transactions.filter(item => monthKey(item.date) === currentMonth);
+  const monthTotal = monthTransactions.reduce((sum, item) => sum + item.amount, 0);
+  const budgetPercent = budget > 0 ? Math.min((monthTotal / budget) * 100, 100) : 0;
+  const dayOfMonth = Number(todayISO().slice(8, 10));
+  const dailyAverage = dayOfMonth > 0 ? monthTotal / dayOfMonth : 0;
+
+  const weeklyData = [0, 0, 0, 0];
+  monthTransactions.forEach(item => {
+    const day = Number(item.date.slice(8, 10));
+    const index = day <= 7 ? 0 : day <= 14 ? 1 : day <= 21 ? 2 : 3;
+    weeklyData[index] += item.amount;
+  });
+  const maxWeek = Math.max(...weeklyData, 1);
+
+  const categoryRows = useMemo(() => {
+    return Object.entries(
+      monthTransactions.reduce<Record<string, number>>((acc, item) => {
+        acc[item.category] = (acc[item.category] ?? 0) + item.amount;
+        return acc;
+      }, {}),
+    )
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [monthTransactions]);
+
+  const dailyGroups = useMemo(() => {
+    return monthTransactions.reduce<Record<string, { total: number; items: Transaction[] }>>((acc, item) => {
+      acc[item.date] ??= { total: 0, items: [] };
+      acc[item.date].total += item.amount;
+      acc[item.date].items.push(item);
+      return acc;
+    }, {});
+  }, [monthTransactions]);
+
+  const selectedDay = selectedDate ? dailyGroups[selectedDate] : null;
+  const insightSignature = JSON.stringify({
+    count: transactions.length,
+    total: transactions.reduce((sum, item) => sum + item.amount, 0),
+    last: transactions.map(item => `${item.id}:${item.amount}:${item.date}`).slice(0, 12),
+    api: Boolean(settings.apiKey.trim()),
+    model: settings.model,
+    budget,
+  });
 
   useEffect(() => {
-    setTransactions(db.getTransactions());
-    setBudget(db.getSettings().monthlyBudget);
-  }, []);
-
-  // --- 1. 时间过滤与基础统计数据计算 (以 2026-05-23 为基准今天) ---
-  const todayStr = '2026-05-23';
-  const getYearMonth = (dateStr: string) => dateStr.substring(0, 7); // "YYYY-MM"
-  
-  // 5月数据
-  const mayTransactions = transactions.filter(t => getYearMonth(t.date) === '2026-05');
-  const mayTotal = mayTransactions.reduce((sum, t) => sum + t.amount, 0);
-
-  // 4月数据
-  const aprilTransactions = transactions.filter(t => getYearMonth(t.date) === '2026-04');
-  const aprilTotal = aprilTransactions.reduce((sum, t) => sum + t.amount, 0);
-
-  // 预算百分比
-  const budgetPercent = Math.min((mayTotal / budget) * 100, 100);
-
-  // 日均消费 (5月已过去23天)
-  const daysInMayPassed = 23;
-  const mayDailyAverage = mayTotal / daysInMayPassed;
-
-  // --- 2. 周度开销计算 (5月份细化到 W1 - W4) ---
-  // W1: 5-01 ~ 5-02 (2天)
-  // W2: 5-03 ~ 5-09 (7天)
-  // W3: 5-10 ~ 5-16 (7天)
-  // W4: 5-17 ~ 5-23 (7天)
-  const getWeekNumber = (dateStr: string): number => {
-    const day = parseInt(dateStr.split('-')[2]);
-    if (day <= 2) return 1;
-    if (day <= 9) return 2;
-    if (day <= 16) return 3;
-    return 4;
-  };
-
-  const weeklyData = [0, 0, 0, 0]; // W1, W2, W3, W4 对应的消费和
-  mayTransactions.forEach(t => {
-    const w = getWeekNumber(t.date);
-    weeklyData[w - 1] += t.amount;
-  });
-
-  const maxWeeklySpent = Math.max(...weeklyData, 1);
-
-  // --- 3. 跨月度消费趋势 (最近 4 个月：2月、3月、4月、5月) ---
-  const getMonthTotal = (ym: string) => {
-    return transactions
-      .filter(t => getYearMonth(t.date) === ym)
-      .reduce((sum, t) => sum + t.amount, 0);
-  };
-  
-  const monthlyHistory = [
-    { label: '2月', value: getMonthTotal('2026-02') },
-    { label: '3月', value: getMonthTotal('2026-03') },
-    { label: '4月', value: getMonthTotal('2026-04') },
-    { label: '5月', value: mayTotal },
-  ];
-  const maxMonthlySpent = Math.max(...monthlyHistory.map(m => m.value), 1);
-
-  // --- 4. 5月份消费分类统计排行 ---
-  const categoryTotals: Record<string, number> = {};
-  mayTransactions.forEach(t => {
-    categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
-  });
-
-  const sortedCategories = Object.entries(categoryTotals)
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, value]) => ({ name, value }));
-
-  const maxCategorySpent = sortedCategories.length > 0 ? sortedCategories[0].value : 1;
-
-  // --- 5. 环比与AI变化趋势洞察分析模型 (周环比与月度环比) ---
-  // A. 周环比 (W4 vs W3)
-  const w3Spent = weeklyData[2];
-  const w4Spent = weeklyData[3];
-  const weeklyDeltaPercent = w3Spent > 0 ? ((w4Spent - w3Spent) / w3Spent) * 100 : 0;
-
-  // B. 月环比 (5月前23天对比4月前23天的归一化对比)
-  // 4月前23天数据 (即日期 <= 2026-04-23)
-  const aprilNormalizedTransactions = aprilTransactions.filter(t => {
-    const day = parseInt(t.date.split('-')[2]);
-    return day <= 23;
-  });
-  const aprilNormalizedTotal = aprilNormalizedTransactions.reduce((sum, t) => sum + t.amount, 0);
-  const monthlyDeltaPercent = aprilNormalizedTotal > 0 ? ((mayTotal - aprilNormalizedTotal) / aprilNormalizedTotal) * 100 : 0;
-
-  // C. 查找本月最主要的超支分类 (与上月对比增幅最大的分类)
-  // 4月各分类统计
-  const aprilCategoryTotals: Record<string, number> = {};
-  aprilTransactions.forEach(t => {
-    aprilCategoryTotals[t.category] = (aprilCategoryTotals[t.category] || 0) + t.amount;
-  });
-  
-  let worstCategory = '';
-  let worstIncrease = 0;
-  Object.entries(categoryTotals).forEach(([cat, mayAmt]) => {
-    const aprAmt = aprilCategoryTotals[cat] || 0;
-    const diff = mayAmt - aprAmt;
-    if (diff > worstIncrease && aprAmt > 0) {
-      worstIncrease = diff;
-      worstCategory = cat;
-    }
-  });
+    let active = true;
+    void generateFinancialInsights(transactions, settings).then(result => {
+      if (active) setInsightResult(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [insightSignature, settings, transactions]);
 
   return (
-    <div className="w-full max-w-md mx-auto p-4 space-y-6 animate-slide-up pb-24">
-      {/* 头部展示 */}
-      <div className="flex justify-between items-start">
+    <div className="w-full max-w-md mx-auto px-4 space-y-5 animate-slide-up dashboard-bottom-space">
+      <section className="flex justify-between items-start">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight text-dark-text flex items-center gap-1.5">
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-1.5">
             记账仪表盘 <TrendingUp size={20} className="text-brand-purple" />
           </h1>
-          <p className="text-xs text-dark-muted">财务数据大视界与 AI 环比趋势深度洞察</p>
+          <p className="text-xs text-dark-muted">本月资金状态、分类结构和每日花费。</p>
         </div>
         <div className="text-[10px] text-brand-success bg-brand-success/10 px-2.5 py-1 rounded-full border border-brand-success/20 flex items-center gap-1">
           <ShieldCheck size={12} />
-          数据完全本地安全
+          本地数据
+        </div>
+      </section>
+
+      <section className="glass-panel rounded-2xl p-2 grid grid-cols-3 gap-1 sticky top-0 z-20">
+        <Segment active={view === 'overview'} label="概览" onClick={() => setView('overview')} />
+        <Segment active={view === 'category'} label="分类" onClick={() => setView('category')} />
+        <Segment active={view === 'calendar'} label="日历" onClick={() => setView('calendar')} />
+      </section>
+
+      {view === 'overview' && (
+        <>
+          <BudgetCard
+            budget={budget}
+            budgetPercent={budgetPercent}
+            dailyAverage={dailyAverage}
+            monthTotal={monthTotal}
+            transactionCount={monthTransactions.length}
+          />
+          <InsightCard result={insightResult} />
+          <ChartCard title="本月周度趋势" icon={<Calendar size={14} className="text-brand-purple" />}>
+            {weeklyData.map((amount, index) => (
+              <Bar key={index} label={`W${index + 1}`} amount={amount} max={maxWeek} />
+            ))}
+          </ChartCard>
+        </>
+      )}
+
+      {view === 'category' && <CategoryAnalysis categoryRows={categoryRows} monthTotal={monthTotal} />}
+
+      {view === 'calendar' && (
+        <CalendarOverview
+          currentMonth={currentMonth}
+          dailyGroups={dailyGroups}
+          onSelectDate={setSelectedDate}
+          selectedDate={selectedDate}
+        />
+      )}
+
+      {selectedDate && selectedDay && (
+        <DayDetailSheet date={selectedDate} items={selectedDay.items} total={selectedDay.total} onClose={() => setSelectedDate(null)} />
+      )}
+    </div>
+  );
+}
+
+function Segment({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`h-10 rounded-xl text-xs font-bold transition-all ${
+        active ? 'bg-white text-brand-purple shadow-sm border border-brand-purple/20' : 'text-dark-muted hover:text-dark-text'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function BudgetCard({
+  budget,
+  budgetPercent,
+  dailyAverage,
+  monthTotal,
+  transactionCount,
+}: {
+  budget: number;
+  budgetPercent: number;
+  dailyAverage: number;
+  monthTotal: number;
+  transactionCount: number;
+}) {
+  return (
+    <section className="glass-panel rounded-2xl p-5 relative overflow-hidden shadow-lg shadow-brand-purple/3">
+      <div className="absolute right-[-40px] top-[-40px] w-32 h-32 rounded-full bg-brand-cyan/15 blur-3xl" />
+      <div className="absolute left-[-40px] bottom-[-40px] w-32 h-32 rounded-full bg-brand-purple/15 blur-3xl" />
+      <div className="flex flex-col items-center py-4 space-y-4 relative">
+        <div className="relative w-40 h-40 flex items-center justify-center">
+          <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="40" stroke="rgba(15, 23, 42, 0.05)" strokeWidth="7" fill="transparent" />
+            <circle
+              cx="50"
+              cy="50"
+              r="40"
+              stroke={budgetPercent > 90 ? '#e11d48' : budgetPercent > 70 ? '#d97706' : '#4f46e5'}
+              strokeWidth="7"
+              fill="transparent"
+              strokeDasharray={2 * Math.PI * 40}
+              strokeDashoffset={2 * Math.PI * 40 * (1 - budgetPercent / 100)}
+              strokeLinecap="round"
+              className="transition-all duration-1000 ease-out"
+            />
+          </svg>
+          <div className="absolute text-center space-y-1">
+            <span className="text-[10px] text-dark-muted font-medium tracking-widest uppercase">本月支出</span>
+            <div className="text-2xl font-black font-mono tracking-tight">¥{monthTotal.toFixed(0)}</div>
+            <div className="text-[10px] text-dark-muted">预算 ¥{budget}</div>
+          </div>
+        </div>
+        <div className="text-xs text-dark-text/80 font-medium">
+          预算已使用 <span className="font-bold text-brand-purple">{budgetPercent.toFixed(0)}%</span>
         </div>
       </div>
 
-      {/* 1. 预算极光圆环与月统计卡片 */}
-      <div className="glass-panel rounded-2xl p-5 relative overflow-hidden shadow-lg shadow-brand-purple/3">
-        <div className="absolute right-[-40px] top-[-40px] w-32 h-32 rounded-full bg-brand-cyan/15 blur-3xl"></div>
-        <div className="absolute left-[-40px] bottom-[-40px] w-32 h-32 rounded-full bg-brand-purple/15 blur-3xl"></div>
-
-        <div className="flex flex-col items-center py-4 space-y-4">
-          {/* 圆环 SVG 进度条 */}
-          <div className="relative w-40 h-40 flex items-center justify-center">
-            <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
-              {/* 底环 */}
-              <circle
-                cx="50"
-                cy="50"
-                r="40"
-                stroke="rgba(15, 23, 42, 0.05)"
-                strokeWidth="7"
-                fill="transparent"
-              />
-              {/* 进度环 */}
-              <circle
-                cx="50"
-                cy="50"
-                r="40"
-                stroke={budgetPercent > 90 ? '#e11d48' : budgetPercent > 70 ? '#d97706' : '#4f46e5'}
-                strokeWidth="7"
-                fill="transparent"
-                strokeDasharray={2 * Math.PI * 40}
-                strokeDashoffset={2 * Math.PI * 40 * (1 - budgetPercent / 100)}
-                strokeLinecap="round"
-                className="transition-all duration-1000 ease-out"
-              />
-            </svg>
-            
-            {/* 中间文字 */}
-            <div className="absolute text-center space-y-1">
-              <span className="text-[10px] text-dark-muted font-medium tracking-widest uppercase">5月支出</span>
-              <div className="text-2xl font-black text-dark-text font-mono tracking-tight">
-                ￥{mayTotal.toFixed(0)}
-              </div>
-              <div className="text-[10px] text-dark-muted">
-                预算 ￥{budget}
-              </div>
-            </div>
-          </div>
-
-          <div className="text-xs text-dark-text/80 font-medium">
-            本月预算已消耗 <span className={`font-bold ${budgetPercent > 90 ? 'text-brand-rose' : budgetPercent > 70 ? 'text-brand-orange' : 'text-brand-purple'}`}>{budgetPercent.toFixed(0)}%</span>
-          </div>
-        </div>
-
-        {/* 关键数据格子 */}
-        <div className="grid grid-cols-2 gap-3 pt-4 border-t border-black/[0.05]">
-          <div className="bg-black/[0.01] border border-black/[0.05] rounded-xl p-3 text-center space-y-0.5">
-            <span className="text-[10px] text-dark-muted">日均开销 (前23天)</span>
-            <p className="text-sm font-bold text-dark-text font-mono">￥{mayDailyAverage.toFixed(2)}</p>
-          </div>
-          <div className="bg-black/[0.01] border border-black/[0.05] rounded-xl p-3 text-center space-y-0.5">
-            <span className="text-[10px] text-dark-muted">记账频次</span>
-            <p className="text-sm font-bold text-dark-text font-mono">{mayTransactions.length} 笔流水</p>
-          </div>
-        </div>
+      <div className="grid grid-cols-2 gap-3 pt-4 border-t border-black/[0.05]">
+        <Metric label="日均开销" value={`¥${dailyAverage.toFixed(2)}`} />
+        <Metric label="本月笔数" value={`${transactionCount} 笔`} />
       </div>
+    </section>
+  );
+}
 
-      {/* 2. AI 环比趋势变化深度洞察卡片 (根据计算数据智能组合) */}
-      <div className="glass-panel rounded-2xl p-5 border border-brand-neon/20 shadow-md shadow-brand-neon/2 space-y-4">
-        <div className="flex items-center gap-1.5 border-b border-black/[0.06] pb-2">
-          <Sparkles size={16} className="text-brand-neon animate-pulse" />
-          <h2 className="text-sm font-bold text-dark-text">AI 智能趋势洞察</h2>
-        </div>
-
-        <div className="space-y-3.5 text-xs text-dark-text leading-relaxed">
-          {/* A. 周环比结论 */}
-          <div className="flex gap-2">
-            {weeklyDeltaPercent >= 0 ? (
-              <TrendingUp size={16} className="text-brand-rose shrink-0" />
-            ) : (
-              <TrendingDown size={16} className="text-brand-success shrink-0" />
-            )}
-            <p>
-              **本周开销环比对比**：本周支出为 ￥{w4Spent.toFixed(1)}，较上周的 ￥{w3Spent.toFixed(1)}{' '}
-              <span className={weeklyDeltaPercent >= 0 ? 'text-brand-rose font-bold' : 'text-brand-success font-bold'}>
-                {weeklyDeltaPercent >= 0 ? `上涨` : `下降`} {Math.abs(weeklyDeltaPercent).toFixed(1)}%
-              </span>。
-            </p>
-          </div>
-
-          {/* B. 月度环比结论 */}
-          <div className="flex gap-2">
-            {monthlyDeltaPercent >= 0 ? (
-              <TrendingUp size={16} className="text-brand-rose shrink-0" />
-            ) : (
-              <TrendingDown size={16} className="text-brand-success shrink-0" />
-            )}
-            <p>
-              **月度周期走势环比**：对比4月同期的前23天开支 (￥{aprilNormalizedTotal.toFixed(1)})，本月{' '}
-              <span className={monthlyDeltaPercent >= 0 ? 'text-brand-rose font-bold' : 'text-brand-success font-bold'}>
-                {monthlyDeltaPercent >= 0 ? '多支出' : '减少了'} {Math.abs(monthlyDeltaPercent).toFixed(1)}%
-              </span>。当前财务扩张趋势为
-              <span className={monthlyDeltaPercent >= 0 ? 'text-brand-rose font-bold' : 'text-brand-success font-bold'}>
-                【{monthlyDeltaPercent >= 0 ? '超支预警' : '健康收缩'}】
-              </span>。
-            </p>
-          </div>
-
-          {/* C. 超支类别AI警告 */}
-          {worstCategory && (
-            <div className="flex gap-2 bg-brand-rose/10 p-2.5 rounded-xl border border-brand-rose/25 text-[11px] text-brand-orange">
-              <AlertCircle size={15} className="shrink-0 text-brand-rose mt-0.5" />
-              <p>
-                ⚠️ **开支预警**：本月 **[{worstCategory}]** 分类消费相比上月同期涨幅最大（增支 ￥{worstIncrease.toFixed(0)}）。建议克制多余消费，避免继续在该类目中支出。
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 3. 5月份周度开支趋势柱状图 (高精 SVG 自定义绘制，100%稳定) */}
-      <div className="glass-panel rounded-2xl p-5 space-y-4">
-        <h2 className="text-sm font-bold text-dark-text flex items-center gap-1">
-          <Calendar size={14} className="text-brand-purple" /> 5月周度消费趋势 (W1 - W4)
+function InsightCard({ result }: { result: InsightResult }) {
+  return (
+    <section className="glass-panel rounded-2xl p-5 border border-brand-neon/20 shadow-md shadow-brand-neon/2 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold flex items-center gap-1.5">
+          <Sparkles size={16} className="text-brand-neon" />
+          智能洞察
         </h2>
-        
-        <div className="h-36 flex items-end justify-between px-4 pt-4 border-b border-black/[0.05] relative">
-          {/* 背景格线 */}
-          <div className="absolute inset-x-0 top-1/3 border-t border-black/[0.02]" />
-          <div className="absolute inset-x-0 top-2/3 border-t border-black/[0.02]" />
-
-          {weeklyData.map((spent, idx) => {
-            const hPercent = (spent / maxWeeklySpent) * 100;
-            return (
-              <div key={idx} className="flex flex-col items-center space-y-2 w-14 group z-10">
-                {/* 悬浮数值 */}
-                <span className="text-[10px] text-dark-muted opacity-80 group-hover:opacity-100 group-hover:text-brand-purple font-mono transition-opacity">
-                  ￥{spent.toFixed(0)}
-                </span>
-                {/* 渐变柱子 */}
-                <div 
-                  className="w-8 rounded-t-lg bg-gradient-to-t from-brand-purple/50 to-brand-cyan/80 group-hover:to-brand-cyan shadow-md shadow-brand-purple/10 transition-all duration-500"
-                  style={{ height: `${Math.max(hPercent, 6)}px` }}
-                />
-                {/* 下方标签 */}
-                <span className="text-[10px] text-dark-muted font-medium pb-1">
-                  第 {idx + 1} 周
-                </span>
-              </div>
-            );
-          })}
-        </div>
+        <span className="text-[10px] text-dark-muted bg-black/[0.03] border border-black/[0.05] rounded-full px-2 py-0.5 flex items-center gap-1">
+          {result.source === 'model' ? <Sparkles size={10} className="text-brand-purple" /> : <Loader2 size={10} />}
+          {result.source === 'model' ? '大模型分析' : result.enoughDataForModel ? '本地分析' : '数据积累中'}
+        </span>
       </div>
 
-      {/* 4. 5月份消费分类统计比例排行 */}
-      <div className="glass-panel rounded-2xl p-5 space-y-4">
-        <h2 className="text-sm font-bold text-dark-text">5月分类消费开销排行榜</h2>
-        
-        <div className="space-y-3.5">
-          {sortedCategories.length === 0 ? (
-            <p className="text-xs text-dark-muted text-center py-4">本月暂无记账数据</p>
-          ) : (
-            sortedCategories.map(item => {
-              const emoji = CATEGORY_EMOJIS[item.name] || '🪙';
-              const colorClass = CATEGORY_COLORS[item.name] || 'from-gray-500/20 to-slate-500/20 text-gray-400 border-gray-500/30';
-              const p = (item.value / maxCategorySpent) * 100;
-              const ratio = (item.value / mayTotal) * 100;
+      <div className="space-y-2.5">
+        {result.insights.map(insight => (
+          <div
+            key={`${insight.title}-${insight.body}`}
+            className={`rounded-2xl border p-3 text-xs leading-relaxed ${toneClass(insight.tone)}`}
+          >
+            <div className="flex gap-2">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <p className="font-bold">{insight.title}</p>
+                <p className="text-dark-text/80">{insight.body}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
+function toneClass(tone: 'info' | 'warn' | 'success') {
+  if (tone === 'warn') return 'bg-brand-rose/8 border-brand-rose/20 text-brand-rose';
+  if (tone === 'success') return 'bg-brand-success/8 border-brand-success/20 text-brand-success';
+  return 'bg-brand-purple/8 border-brand-purple/20 text-brand-purple';
+}
+
+function CategoryAnalysis({ categoryRows, monthTotal }: { categoryRows: Array<{ category: string; amount: number }>; monthTotal: number }) {
+  const topAmount = categoryRows[0]?.amount ?? 1;
+  const pieGradient = buildPieGradient(categoryRows, monthTotal);
+
+  return (
+    <section className="glass-panel rounded-2xl p-5 space-y-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold flex items-center gap-1.5">
+          <ChartPie size={15} className="text-brand-purple" />
+          本月资金分类
+        </h2>
+        <span className="text-[10px] text-dark-muted font-mono">¥{monthTotal.toFixed(2)}</span>
+      </div>
+
+      {categoryRows.length === 0 ? (
+        <p className="text-xs text-dark-muted text-center py-8">本月暂无记账数据</p>
+      ) : (
+        <>
+          <div className="flex items-center justify-center py-2">
+            <div className="relative w-48 h-48 rounded-full shadow-inner" style={{ background: pieGradient }}>
+              <div className="absolute inset-8 rounded-full bg-white/90 backdrop-blur flex flex-col items-center justify-center text-center">
+                <span className="text-[10px] text-dark-muted">总支出</span>
+                <strong className="text-xl font-black font-mono">¥{monthTotal.toFixed(0)}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3.5">
+            {categoryRows.map((row, index) => {
+              const width = Math.max((row.amount / topAmount) * 100, 4);
+              const ratio = monthTotal > 0 ? (row.amount / monthTotal) * 100 : 0;
               return (
-                <div key={item.name} className="space-y-1">
+                <div key={row.category} className="space-y-1">
                   <div className="flex justify-between text-xs font-semibold">
-                    <div className="flex items-center gap-1.5">
-                      <span>{emoji}</span>
-                      <span className="text-dark-text">{item.name}</span>
-                      <span className="text-[10px] text-dark-muted font-normal">占 {ratio.toFixed(0)}%</span>
-                    </div>
-                    <span className="font-mono text-dark-text">￥{item.value.toFixed(2)}</span>
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: PIE_COLORS[index % PIE_COLORS.length] }} />
+                      <span>{getCategoryEmoji(row.category)}</span>
+                      <span className="truncate">{row.category}</span>
+                      <span className="text-[10px] text-dark-muted font-normal">{ratio.toFixed(0)}%</span>
+                    </span>
+                    <span className="font-mono">¥{row.amount.toFixed(2)}</span>
                   </div>
-                  {/* 自定义进度条 */}
                   <div className="w-full h-2 bg-black/[0.06] rounded-full overflow-hidden">
-                    <div 
-                      className={`h-full bg-gradient-to-r ${colorClass.split(' ')[0]} ${colorClass.split(' ')[1]} transition-all duration-500 rounded-full`}
-                      style={{ width: `${Math.max(p, 4)}%` }}
-                    />
+                    <div className={`h-full bg-gradient-to-r ${getCategoryGradient(row.category)} rounded-full`} style={{ width: `${width}%` }} />
                   </div>
                 </div>
               );
-            })
-          )}
-        </div>
-      </div>
+            })}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
 
-      {/* 5. 跨月度消费历史分析 (最近 4 个月大趋势) */}
-      <div className="glass-panel rounded-2xl p-5 space-y-4">
-        <h2 className="text-sm font-bold text-dark-text flex items-center gap-1">
-          <TrendingUp size={14} className="text-brand-purple" /> 跨月消费支出总趋势 (近4个月)
+function CalendarOverview({
+  currentMonth,
+  dailyGroups,
+  onSelectDate,
+  selectedDate,
+}: {
+  currentMonth: string;
+  dailyGroups: Record<string, { total: number; items: Transaction[] }>;
+  onSelectDate: (date: string) => void;
+  selectedDate: string | null;
+}) {
+  const cells = buildMonthCells(currentMonth);
+  const monthTotal = Object.values(dailyGroups).reduce((sum, day) => sum + day.total, 0);
+
+  return (
+    <section className="glass-panel rounded-2xl p-4 space-y-4">
+      <div className="flex justify-between items-center px-1">
+        <h2 className="text-sm font-bold flex items-center gap-1.5">
+          <Calendar size={15} className="text-brand-purple" />
+          每日花费
         </h2>
-
-        <div className="h-36 flex items-end justify-between px-6 pt-4 border-b border-black/[0.05] relative">
-          <div className="absolute inset-x-0 top-1/2 border-t border-black/[0.02]" />
-
-          {monthlyHistory.map((mon, idx) => {
-            const hPercent = (mon.value / maxMonthlySpent) * 100;
-            return (
-              <div key={idx} className="flex flex-col items-center space-y-2 w-14 group z-10">
-                <span className="text-[10px] text-dark-muted group-hover:text-brand-purple font-mono transition-colors">
-                  ￥{mon.value.toFixed(0)}
-                </span>
-                <div 
-                  className="w-6 rounded-t-lg bg-gradient-to-t from-brand-purple/70 to-brand-blue/30 group-hover:from-brand-purple group-hover:to-brand-cyan transition-all duration-500 shadow-md shadow-brand-purple/10"
-                  style={{ height: `${Math.max(hPercent, 6)}px` }}
-                />
-                <span className="text-[10px] text-dark-muted font-medium pb-1">
-                  {mon.label}
-                </span>
-              </div>
-            );
-          })}
-        </div>
+        <span className="text-[10px] text-dark-muted font-mono">
+          {currentMonth} · ¥{monthTotal.toFixed(0)}
+        </span>
       </div>
+
+      <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-dark-muted font-bold">
+        {['一', '二', '三', '四', '五', '六', '日'].map(day => (
+          <span key={day}>{day}</span>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-1.5">
+        {cells.map((cell, index) => {
+          if (!cell) return <div key={`blank-${index}`} className="aspect-square" />;
+          const date = `${currentMonth}-${String(cell).padStart(2, '0')}`;
+          const total = dailyGroups[date]?.total ?? 0;
+          const active = selectedDate === date;
+          return (
+            <button
+              key={date}
+              type="button"
+              onClick={() => total > 0 && onSelectDate(date)}
+              disabled={total === 0}
+              className={`aspect-square rounded-xl border text-left p-1.5 transition-all ${
+                active
+                  ? 'bg-brand-purple text-white border-brand-purple shadow-md shadow-brand-purple/20'
+                  : total > 0
+                    ? 'bg-white/70 border-brand-purple/15 hover:border-brand-purple/40'
+                    : 'bg-black/[0.015] border-black/[0.03] text-dark-muted/60'
+              }`}
+            >
+              <span className="block text-[10px] font-bold leading-none">{cell}</span>
+              {total > 0 && <span className="block mt-2 text-[10px] font-black font-mono leading-none">¥{formatCalendarAmount(total)}</span>}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-dark-muted px-1">日历中只显示当天总金额；点开有消费的日期可查看明细。</p>
+    </section>
+  );
+}
+
+function DayDetailSheet({ date, items, onClose, total }: { date: string; items: Transaction[]; onClose: () => void; total: number }) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/25 backdrop-blur-[3px] px-5 safe-modal-y" onClick={onClose}>
+      <section
+        className="w-full max-w-sm rounded-3xl glass-panel-heavy border border-black/[0.06] p-5 space-y-4 animate-slide-up shadow-2xl shadow-slate-900/10"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="text-base font-black">{formatShortDate(date)}</h3>
+            <p className="text-xs text-dark-muted font-mono">
+              合计 ¥{total.toFixed(2)} · {items.length} 笔
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="p-2 rounded-xl bg-black/[0.04] text-dark-muted hover:text-dark-text">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="space-y-2 max-h-[52dvh] overflow-y-auto no-scrollbar">
+          {items.map(item => (
+            <div key={item.id} className="flex items-center justify-between gap-3 rounded-2xl bg-white/60 border border-black/[0.05] p-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-black/[0.04] flex items-center justify-center shrink-0">{getCategoryEmoji(item.category)}</div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold truncate">{item.description}</p>
+                  <p className="text-[10px] text-dark-muted truncate">
+                    {item.category} · {item.paymentMethod}
+                  </p>
+                </div>
+              </div>
+              <span className="text-xs font-black font-mono shrink-0">¥{item.amount.toFixed(2)}</span>
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
-};
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-black/[0.01] border border-black/[0.05] rounded-xl p-3 text-center space-y-0.5">
+      <span className="text-[10px] text-dark-muted">{label}</span>
+      <p className="text-sm font-bold font-mono">{value}</p>
+    </div>
+  );
+}
+
+function ChartCard({ children, icon, title }: { children: React.ReactNode; icon: React.ReactNode; title: string }) {
+  return (
+    <section className="glass-panel rounded-2xl p-5 space-y-4">
+      <h2 className="text-sm font-bold flex items-center gap-1">
+        {icon} {title}
+      </h2>
+      <div className="h-36 flex items-end justify-between px-4 pt-4 border-b border-black/[0.05] relative">{children}</div>
+    </section>
+  );
+}
+
+function Bar({ amount, label, max }: { amount: number; label: string; max: number }) {
+  const height = Math.max((amount / max) * 100, 6);
+  return (
+    <div className="flex flex-col items-center space-y-2 w-14 z-10">
+      <span className="text-[10px] text-dark-muted font-mono">¥{amount.toFixed(0)}</span>
+      <div className="w-8 rounded-t-lg bg-gradient-to-t from-brand-purple/60 to-brand-cyan/80 shadow-md shadow-brand-purple/10 transition-all duration-500" style={{ height }} />
+      <span className="text-[10px] text-dark-muted font-medium pb-1">{label}</span>
+    </div>
+  );
+}
+
+function buildPieGradient(rows: Array<{ category: string; amount: number }>, total: number) {
+  if (rows.length === 0 || total <= 0) return CATEGORY_COLORS.其他;
+
+  let cursor = 0;
+  const stops = rows.map((row, index) => {
+    const start = cursor;
+    const end = cursor + (row.amount / total) * 100;
+    cursor = end;
+    const color = PIE_COLORS[index % PIE_COLORS.length];
+    return `${color} ${start.toFixed(2)}% ${end.toFixed(2)}%`;
+  });
+  return `conic-gradient(${stops.join(', ')})`;
+}
+
+function buildMonthCells(month: string) {
+  const [year, monthIndex] = month.split('-').map(Number);
+  const first = new Date(year, monthIndex - 1, 1);
+  const daysInMonth = new Date(year, monthIndex, 0).getDate();
+  const mondayOffset = (first.getDay() + 6) % 7;
+  return [...Array(mondayOffset).fill(null), ...Array.from({ length: daysInMonth }, (_, index) => index + 1)];
+}
+
+function formatCalendarAmount(amount: number) {
+  if (amount >= 1000) return `${(amount / 1000).toFixed(1)}k`;
+  return amount.toFixed(0);
+}

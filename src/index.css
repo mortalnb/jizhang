@@ -40,13 +40,44 @@
 }
 
 @layer base {
+  html {
+    min-height: 100%;
+    background: #f5f7fa;
+  }
+
   body {
     @apply bg-dark-bg text-dark-text antialiased selection:bg-brand-purple/20 selection:text-brand-purple;
     font-family: 'Inter', 'Outfit', system-ui, -apple-system, sans-serif;
     overflow-x: hidden;
     margin: 0;
     padding: 0;
+    min-height: 100dvh;
   }
+}
+
+.app-shell {
+  min-height: 100dvh;
+}
+
+.safe-top {
+  padding-top: max(1rem, env(safe-area-inset-top));
+}
+
+.safe-bottom-nav {
+  bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+.dashboard-bottom-space {
+  padding-bottom: calc(6.25rem + env(safe-area-inset-bottom));
+}
+
+.safe-sheet-bottom {
+  padding-bottom: max(1.25rem, calc(env(safe-area-inset-bottom) + 1rem));
+}
+
+.safe-modal-y {
+  padding-top: max(1.25rem, env(safe-area-inset-top));
+  padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
 }
 
 /* 晶莹浅色玻璃卡片样式 (Glassmorphism Light) */
