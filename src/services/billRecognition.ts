@@ -1,3 +1,4 @@
+import { CapacitorPluginMlKitTextRecognition } from '@pantrist/capacitor-plugin-ml-kit-text-recognition';
 import type { ParsedTransaction, SplitItem } from '../types';
 import { todayISO } from './date';
 
@@ -142,6 +143,12 @@ const categoryFor = (description: string, categories: string[]) => {
 };
 
 const normalizeAmount = (value: string) => Number(Number(value).toFixed(2));
+const normalizeBillText = (rawText: string) =>
+  rawText
+    .replace(/[¥￥]\s*/g, ' ￥')
+    .replace(/[×x]\s*(\d+)/gi, ' $1件')
+    .replace(/\r/g, '\n');
+
 const itemTitle = (description: string, quantity: string) => {
   const clean = description.replace(/\s+/g, ' ').trim();
   const quantityNumber = Number(quantity.match(/\d+(?:\.\d+)?/)?.[0] ?? 1);
@@ -152,10 +159,65 @@ const billDetail = (sourceLabel: string, description: string, amount: number, qu
   return `${sourceLabel}截图拆单识别：${description}${quantityText}，金额 ¥${amount.toFixed(2)}，分类由商品关键词自动匹配。`;
 };
 
+const isNoiseLine = (line: string) =>
+  /^(交易完成|盒马鲜生|盒马|规格[:：]?|单价[:：]?|申请退款|加购物车|上市日期|生产日期|全部订单|已发货|实付款)$/.test(line) ||
+  /^(\d{1,2}:\d{2}|5G|4G|Wi-?Fi|wifi)$/i.test(line);
+
+const cleanDescription = (value: string) =>
+  value
+    .replace(/^(盒马鲜生|盒马)\s*/, '盒马 ')
+    .replace(/^【.*?】/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const parseItemLine = (line: string) => {
+  const normalized = line.replace(/\s+/g, ' ').trim();
+  const match = normalized.match(/^(.+?)\s+[￥¥](\d+(?:\.\d{1,2})?)\s+(\d+[^\s]*)$/);
+  if (!match) return undefined;
+  return {
+    description: cleanDescription(match[1]),
+    amount: normalizeAmount(match[2]),
+    quantity: match[3].trim(),
+  };
+};
+
+const parseOcrItemBlocks = (rawText: string) => {
+  const lines = normalizeBillText(rawText)
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  const items: Array<{ description: string; amount: number; quantity: string }> = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const current = lines[index];
+    const sameLine = parseItemLine(current);
+    if (sameLine) {
+      items.push(sameLine);
+      continue;
+    }
+
+    const amountMatch = current.match(/^[￥¥]\s*(\d+(?:\.\d{1,2})?)$/) || current.match(/^(\d+(?:\.\d{1,2})?)$/);
+    if (!amountMatch) continue;
+
+    const previous = lines[index - 1] ?? '';
+    const next = lines[index + 1] ?? '';
+    const quantityMatch = next.match(/^(\d+[盒袋杯瓶份件只枚袋包罐台个张次]?)/);
+    if (!previous || isNoiseLine(previous)) continue;
+
+    items.push({
+      description: cleanDescription(previous),
+      amount: normalizeAmount(amountMatch[1]),
+      quantity: quantityMatch?.[1] ?? '1件',
+    });
+  }
+
+  return items;
+};
+
 const parseHema = (rawText: string, categories: string[]): ParsedTransaction => {
   const itemPattern = /^(.+?)\s+[￥¥](\d+(?:\.\d{1,2})?)\s+(\d+[^\s]*)$/gm;
   const splitItems: SplitItem[] = [];
-  for (const match of rawText.matchAll(itemPattern)) {
+  for (const match of normalizeBillText(rawText).matchAll(itemPattern)) {
     const description = match[1].trim();
     const amount = normalizeAmount(match[2]);
     const quantity = match[3].trim();
@@ -167,6 +229,18 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
       detail: billDetail('盒马鲜生', description, amount, quantity),
       tag: '#盒马周购',
     });
+  }
+
+  if (splitItems.length === 0) {
+    for (const item of parseOcrItemBlocks(rawText)) {
+      splitItems.push({
+        amount: item.amount,
+        category: categoryFor(item.description, categories),
+        description: itemTitle(item.description, item.quantity),
+        detail: billDetail('盒马鲜生', item.description, item.amount, item.quantity),
+        tag: '#盒马周购',
+      });
+    }
   }
 
   const total = normalizeAmount(String(splitItems.reduce((sum, item) => sum + item.amount, 0)));
@@ -238,27 +312,32 @@ export const parseBillText = (rawText: string, source: BillSource, categories: s
 };
 
 export const recognizeBillImage = async (file: File, categories: string[]): Promise<RecognizedBill> => {
-  const nativeRecognizer = window.Capacitor?.Plugins?.TextRecognition;
-  if (nativeRecognizer?.recognize) {
+  const fixture = await guessFixture(file);
+
+  try {
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
       reader.onerror = () => reject(new Error('图片读取失败'));
       reader.readAsDataURL(file);
     });
-    const response = await nativeRecognizer.recognize({ image: dataUrl });
+    const base64Image = dataUrl.split(',')[1] ?? dataUrl;
+    const response = await CapacitorPluginMlKitTextRecognition.detectText({ base64Image, rotation: 0 });
     const rawText = String(response.text ?? '');
-    const detected = detectSource(rawText);
-    return {
-      source: detected.source,
-      sourceLabel: SOURCE_LABELS[detected.source],
-      confidence: detected.confidence,
-      rawText,
-      result: parseBillText(rawText, detected.source, categories),
-    };
+    if (rawText.trim()) {
+      const detected = detectSource(rawText);
+      return {
+        source: detected.source,
+        sourceLabel: SOURCE_LABELS[detected.source],
+        confidence: detected.confidence,
+        rawText,
+        result: parseBillText(rawText, detected.source, categories),
+      };
+    }
+  } catch (error) {
+    console.info('Native OCR unavailable or failed, falling back to known fixtures.', error);
   }
 
-  const fixture = await guessFixture(file);
   const rawText = fixture?.rawText ?? '';
   const detected = fixture ? { source: fixture.source, confidence: 0.99 } : detectSource(rawText);
   return {
@@ -270,14 +349,3 @@ export const recognizeBillImage = async (file: File, categories: string[]): Prom
   };
 };
 
-declare global {
-  interface Window {
-    Capacitor?: {
-      Plugins?: {
-        TextRecognition?: {
-          recognize?: (options: { image: string }) => Promise<{ text?: string }>;
-        };
-      };
-    };
-  }
-}

@@ -16,7 +16,7 @@ export default function App() {
       <div className="absolute top-[-100px] left-1/2 -translate-x-1/2 w-[350px] h-[350px] rounded-full bg-brand-purple/10 blur-[80px] pointer-events-none" />
       <div className="absolute top-[220px] left-1/2 -translate-x-1/2 w-[300px] h-[300px] rounded-full bg-brand-cyan/10 blur-[100px] pointer-events-none" />
 
-      <header className="safe-top w-full max-w-md px-4 pb-3 flex justify-between items-center z-40 shrink-0 bg-white/70 backdrop-blur-xl border-b border-black/[0.04]">
+      <header className="safe-top w-full max-w-md px-4 pb-3 flex justify-between items-center z-40 shrink-0 bg-dark-bg/95 backdrop-blur-xl border-b border-black/[0.03]">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-purple to-brand-cyan flex items-center justify-center shadow-lg shadow-brand-purple/20">
             <BookText size={16} className="text-white" />
@@ -24,7 +24,7 @@ export default function App() {
           <span className="text-base font-black tracking-wider">记账</span>
         </div>
         <span className="text-[10px] text-dark-muted font-semibold bg-black/[0.04] border border-black/[0.05] px-2.5 py-1 rounded-full uppercase tracking-wider font-mono">
-          v1.2.1
+          v1.2.2
         </span>
       </header>
 
