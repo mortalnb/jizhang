@@ -149,6 +149,10 @@ const normalizeBillText = (rawText: string) =>
     .replace(/[×x]\s*(\d+)/gi, ' $1件')
     .replace(/\r/g, '\n');
 
+const hasNativeOcrRuntime = () =>
+  typeof window !== 'undefined' &&
+  Boolean((window as typeof window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
+
 const itemTitle = (description: string, quantity: string) => {
   const clean = description.replace(/\s+/g, ' ').trim();
   const quantityNumber = Number(quantity.match(/\d+(?:\.\d+)?/)?.[0] ?? 1);
@@ -292,17 +296,39 @@ const parseTaobao = (rawText: string, categories: string[]): ParsedTransaction =
 };
 
 const parseGeneric = (rawText: string, categories: string[]): ParsedTransaction => {
-  const amountMatch = rawText.match(/￥?(\d+(?:\.\d{1,2})?)/);
-  const amount = amountMatch ? normalizeAmount(amountMatch[1]) : 0;
+  const amount = extractTrustedAmount(rawText);
   const fallback = categories.includes('其他') ? '其他' : categories[categories.length - 1];
+  const normalized = rawText.replace(/\s+/g, ' ').trim();
+  const hasReliableAmount = amount > 0;
   return {
     amount,
     category: fallback,
-    paymentMethod: '微信支付',
-    description: rawText.slice(0, 18) || '截图账单',
-    detail: rawText ? `普通截图账单识别到金额 ¥${amount.toFixed(2)}，请确认分类和备注。` : '未能识别出明确账单内容，请手动补充金额、分类和备注。',
+    paymentMethod: '',
+    description: normalized.slice(0, 18) || '截图待确认',
+    detail: hasReliableAmount
+      ? `普通截图账单识别到可信金额 ¥${amount.toFixed(2)}，请确认分类和备注。`
+      : '未能从截图中识别出可信金额。为避免误记，已保留为 0 元，请手动确认或在 Android App 中使用本地 OCR。',
     date: todayISO(),
   };
+};
+
+const extractTrustedAmount = (rawText: string) => {
+  const text = normalizeBillText(rawText);
+  const keywordPatterns = [
+    /(?:实付(?:款)?|实际支付|合计|总计|应付|支付(?:金额)?|付款(?:金额)?|订单金额|消费金额)[^\d￥¥]{0,12}[￥¥]?\s*(\d+(?:\.\d{1,2})?)/gi,
+    /[￥¥]\s*(\d+(?:\.\d{1,2})?)[^\n]{0,12}(?:实付(?:款)?|实际支付|合计|总计|应付|支付(?:金额)?|付款(?:金额)?|订单金额|消费金额)/gi,
+  ];
+  for (const pattern of keywordPatterns) {
+    const matches = [...text.matchAll(pattern)].map(match => normalizeAmount(match[1])).filter(amount => amount > 0);
+    if (matches.length > 0) return matches[matches.length - 1];
+  }
+
+  const currencyAmounts = [...text.matchAll(/[￥¥]\s*(\d+(?:\.\d{1,2})?)/g)]
+    .map(match => normalizeAmount(match[1]))
+    .filter(amount => amount > 0);
+  if (currencyAmounts.length === 1) return currencyAmounts[0];
+
+  return 0;
 };
 
 export const parseBillText = (rawText: string, source: BillSource, categories: string[]): ParsedTransaction => {
@@ -314,28 +340,32 @@ export const parseBillText = (rawText: string, source: BillSource, categories: s
 export const recognizeBillImage = async (file: File, categories: string[]): Promise<RecognizedBill> => {
   const fixture = await guessFixture(file);
 
-  try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(new Error('图片读取失败'));
-      reader.readAsDataURL(file);
-    });
-    const base64Image = dataUrl.split(',')[1] ?? dataUrl;
-    const response = await CapacitorPluginMlKitTextRecognition.detectText({ base64Image, rotation: 0 });
-    const rawText = String(response.text ?? '');
-    if (rawText.trim()) {
-      const detected = detectSource(rawText);
-      return {
-        source: detected.source,
-        sourceLabel: SOURCE_LABELS[detected.source],
-        confidence: detected.confidence,
-        rawText,
-        result: parseBillText(rawText, detected.source, categories),
-      };
+  if (hasNativeOcrRuntime()) {
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('图片读取失败'));
+        reader.readAsDataURL(file);
+      });
+      const base64Image = dataUrl.split(',')[1] ?? dataUrl;
+      const response = await CapacitorPluginMlKitTextRecognition.detectText({ base64Image, rotation: 0 });
+      const rawText = String(response.text ?? '');
+      if (rawText.trim()) {
+        const detected = detectSource(rawText);
+        return {
+          source: detected.source,
+          sourceLabel: SOURCE_LABELS[detected.source],
+          confidence: detected.confidence,
+          rawText,
+          result: parseBillText(rawText, detected.source, categories),
+        };
+      }
+    } catch (error) {
+      console.info('Native OCR unavailable or failed, falling back to known fixtures.', error);
     }
-  } catch (error) {
-    console.info('Native OCR unavailable or failed, falling back to known fixtures.', error);
+  } else {
+    console.info('Native OCR is only available in the Android app. Using known fixtures if available.');
   }
 
   const rawText = fixture?.rawText ?? '';

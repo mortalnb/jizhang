@@ -194,6 +194,11 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
                   自动识别：{recognizedBill.sourceLabel} · 置信度 {(recognizedBill.confidence * 100).toFixed(0)}%
                 </p>
               )}
+              {recognizedBill && !recognizedBill.rawText.trim() && (
+                <p className="text-[10px] text-amber-600">
+                  网页预览无法调用 Android 本地 OCR；请在 App 中识别，或手动补充金额。
+                </p>
+              )}
             </div>
             <button
               type="button"
