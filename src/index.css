@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --color-dark-bg: #f5f7fa; /* 极简现代浅灰背景 */
-  --color-dark-card: rgba(255, 255, 255, 0.85); /* 晶莹透亮玻璃卡片 */
-  --color-dark-surface: #edf1f7; /* 二级微灰表面 */
+  --color-dark-bg: #f6f7fb; /* 极简现代浅灰背景 */
+  --color-dark-card: rgba(255, 255, 255, 0.86); /* 晶莹透亮玻璃卡片 */
+  --color-dark-surface: #eef2f7; /* 二级微灰表面 */
   --color-dark-text: #0f172a; /* 主要深石板灰文字 */
   --color-dark-muted: #64748b; /* 优雅烟灰文字 */
   
@@ -42,7 +42,7 @@
 @layer base {
   html {
     min-height: 100%;
-    background: #f5f7fa;
+    background: #f6f7fb;
   }
 
   body {
@@ -58,6 +58,26 @@
 .app-shell {
   height: 100dvh;
   overflow: hidden;
+}
+
+.app-header {
+  background: rgba(246, 247, 251, 0.94);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.05);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.03);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.app-main {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(246, 247, 251, 0));
+}
+
+.app-nav {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.07);
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
 }
 
 .safe-top {
@@ -83,11 +103,11 @@
 
 /* 晶莹浅色玻璃卡片样式 (Glassmorphism Light) */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.86);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(15, 23, 42, 0.06);
-  box-shadow: 0 4px 30px rgba(15, 23, 42, 0.03);
+  border: 1px solid rgba(15, 23, 42, 0.07);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
 }
 
 .glass-panel-light {
@@ -98,7 +118,7 @@
 }
 
 .glass-panel-heavy {
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -119,7 +139,9 @@
 }
 
 .radial-bg-glow {
-  background: radial-gradient(circle at 50% -20%, rgba(99, 102, 241, 0.08) 0%, rgba(2, 132, 199, 0.03) 50%, #f5f7fa 80%);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(246, 247, 251, 0) 28%),
+    linear-gradient(135deg, #f6f7fb 0%, #eef3f9 48%, #f7f8fb 100%);
 }
 
 /* 无滚动条滚动区 */

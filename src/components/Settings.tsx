@@ -84,12 +84,12 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
       <form onSubmit={save} className="space-y-5">
         <Panel icon={<Key size={18} className="text-brand-purple" />} title="大模型服务">
           <Input
-            label="API Key"
+            label="DeepSeek API Key"
             type="password"
             placeholder="sk-..."
             value={settings.apiKey}
             onChange={apiKey => setSettings({ ...settings, apiKey })}
-            hint={settings.apiKey ? '已启用真实接口解析和视觉模型截图识别。' : '文字记账会使用本地规则；截图识别需要填写支持视觉模型的 API Key。'}
+            hint={settings.apiKey ? '已启用真实接口解析。' : '未填写时使用本地规则解析。'}
           />
           <IconInput
             icon={<Globe size={14} className="text-dark-muted" />}

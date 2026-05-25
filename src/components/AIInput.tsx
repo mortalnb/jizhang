@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
-import { Calendar, Check, CreditCard, DollarSign, Image, Send, Sparkles, Tag, X } from 'lucide-react';
+import { Calendar, Check, CreditCard, DollarSign, Image, RefreshCw, Send, Sparkles, Tag, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { aiParser } from '../services/aiParser';
-import { recognizeBillImage, type RecognizedBill } from '../services/billRecognition';
+import { parseBillText, recognizeBillImage, sourceOptions, type BillSource, type RecognizedBill } from '../services/billRecognition';
 import { storage } from '../services/storage';
 import type { ParsedTransaction, SplitItem } from '../types';
 
@@ -22,18 +22,38 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   const [recognizedBill, setRecognizedBill] = useState<RecognizedBill | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+
+  const normalizeCategory = (category: string, text = '') => {
+    if (categories.includes(category)) return category;
+    const source = `${category} ${text}`;
+    if (/生鲜|零食|食品|水果|果蔬|蔬菜|饭|餐|肉|蛋|鱼|虾|面包|水饺|馒头/.test(source)) return categories.includes('餐费') ? '餐费' : categories[0];
+    if (/饮料|咖啡|奶茶|牛奶|酸奶|发酵乳|水|啤酒|茶|果汁/.test(source)) return categories.includes('饮料') ? '饮料' : categories[0];
+    if (/日用|清洁|洗|纸巾|牙膏|湿巾/.test(source)) return categories.includes('日用') ? '日用' : categories[0];
+    if (/鞋|衣|裤|服饰/.test(source)) return categories.includes('服饰') ? '服饰' : categories[0];
+    if (/数码|手机|电脑|耳机|充电/.test(source)) return categories.includes('数码') ? '数码' : categories[0];
+    if (/水费|电费|燃气|物业|话费|网费|缴费|交费/.test(source)) return categories.includes('交费') ? '交费' : categories[0];
+    if (/维修|修理|保养|安装/.test(source)) return categories.includes('维修') ? '维修' : categories[0];
+    return categories.includes('其他') ? '其他' : categories[categories.length - 1];
+  };
+
+  const normalizeParsedCategories = (value: ParsedTransaction): ParsedTransaction => ({
+    ...value,
+    category: normalizeCategory(value.category, `${value.description} ${value.detail ?? ''}`),
+    splitItems: value.splitItems?.map(item => ({
+      ...item,
+      category: normalizeCategory(item.category, `${item.description} ${item.detail ?? ''}`),
+    })),
+  });
 
   const parse = async (text: string) => {
     if (!text.trim()) return;
     setLoading(true);
     setSuccess(false);
-    setErrorMessage('');
     setParsedCard(null);
     try {
       setRecognizedBill(null);
       const result = await aiParser.parse(text, settings);
-      setParsedCard({ ...result, paymentMethod: '' });
+      setParsedCard(normalizeParsedCategories({ ...result, paymentMethod: '' }));
     } finally {
       setLoading(false);
     }
@@ -42,19 +62,31 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   const recognizeImage = async (file: File) => {
     setLoading(true);
     setSuccess(false);
-    setErrorMessage('');
     setParsedCard(null);
     setRecognizedBill(null);
     try {
-      const bill = await recognizeBillImage(file, settings);
-      const result = { ...bill.result, paymentMethod: '' };
+      const bill = await recognizeBillImage(file, categories);
+      const result = normalizeParsedCategories({ ...bill.result, paymentMethod: '' });
       setRecognizedBill({ ...bill, result });
       setParsedCard(result);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '视觉模型识别失败，请检查 API Key、Base URL 和模型名称。');
     } finally {
       setLoading(false);
     }
+  };
+
+  const switchBillSource = (source: BillSource) => {
+    if (!recognizedBill) return;
+    const result = normalizeParsedCategories({ ...parseBillText(recognizedBill.rawText, source, categories), paymentMethod: parsedCard?.paymentMethod ?? '' });
+    const sourceLabel = sourceOptions.find(option => option.value === source)?.label ?? '普通账单';
+    const next = {
+      ...recognizedBill,
+      source,
+      sourceLabel,
+      confidence: source === recognizedBill.source ? recognizedBill.confidence : 0.8,
+      result,
+    };
+    setRecognizedBill(next);
+    setParsedCard(result);
   };
 
   const save = () => {
@@ -112,11 +144,6 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
 
       {!parsedCard && !loading && !success && (
         <section className="glass-panel rounded-2xl p-4 space-y-4 shadow-lg shadow-brand-purple/5">
-          {errorMessage && (
-            <div className="rounded-xl border border-brand-rose/20 bg-brand-rose/[0.06] px-3 py-2 text-xs text-brand-rose leading-relaxed">
-              {errorMessage}
-            </div>
-          )}
           <div className="relative ai-pulse-glow rounded-xl border border-black/[0.08] overflow-hidden bg-white/50 transition-all">
             <textarea
               rows={5}
@@ -153,7 +180,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
             className="w-full py-3.5 bg-black/[0.02] border border-black/[0.08] hover:border-brand-purple/40 hover:bg-brand-purple/[0.04] active:scale-95 font-medium rounded-xl flex items-center justify-center gap-2 transition-all shadow-inner"
           >
             <Image size={18} className="text-brand-purple" />
-            导入截图并用视觉模型拆单
+            导入盒马/淘宝截图并自动拆单
           </button>
         </section>
       )}
@@ -189,6 +216,11 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
                   自动识别：{recognizedBill.sourceLabel} · 置信度 {(recognizedBill.confidence * 100).toFixed(0)}%
                 </p>
               )}
+              {recognizedBill && !recognizedBill.rawText.trim() && (
+                <p className="text-[10px] text-amber-600">
+                  网页预览无法调用 Android 本地 OCR；请在 App 中识别，或手动补充金额。
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -201,6 +233,26 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
               <X size={16} />
             </button>
           </div>
+
+          {recognizedBill && (
+            <div className="grid grid-cols-3 gap-2 rounded-xl bg-black/[0.02] border border-black/[0.05] p-1.5">
+              {sourceOptions.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => switchBillSource(option.value)}
+                  className={`text-[11px] rounded-lg py-2 font-semibold transition-all flex items-center justify-center gap-1 ${
+                    recognizedBill.source === option.value
+                      ? 'bg-white text-brand-purple shadow-sm border border-brand-purple/20'
+                      : 'text-dark-muted hover:text-dark-text'
+                  }`}
+                >
+                  {recognizedBill.source === option.value && <RefreshCw size={11} />}
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <FieldLabel icon={<DollarSign size={12} />} label="消费总计">

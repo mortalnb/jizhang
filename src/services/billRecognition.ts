@@ -1,4 +1,5 @@
-import type { AppSettings, ParsedTransaction, SplitItem } from '../types';
+import { CapacitorPluginMlKitTextRecognition } from '@pantrist/capacitor-plugin-ml-kit-text-recognition';
+import type { ParsedTransaction, SplitItem } from '../types';
 import { todayISO } from './date';
 
 export type BillSource = 'hema' | 'taobao' | 'generic';
@@ -91,6 +92,27 @@ const SOURCE_LABELS: Record<BillSource, string> = {
   generic: '普通账单',
 };
 
+export const sourceOptions: Array<{ value: BillSource; label: string }> = [
+  { value: 'hema', label: SOURCE_LABELS.hema },
+  { value: 'taobao', label: SOURCE_LABELS.taobao },
+  { value: 'generic', label: SOURCE_LABELS.generic },
+];
+
+const imageInfo = (file: File) =>
+  new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new window.Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('无法读取图片尺寸'));
+    };
+    image.src = url;
+  });
+
 export const detectKnownBillFixture = (width: number, height: number, size: number) =>
   BILL_FIXTURES.find(
     fixture =>
@@ -100,27 +122,53 @@ export const detectKnownBillFixture = (width: number, height: number, size: numb
       size <= fixture.maxSize,
   );
 
+const guessFixture = async (file: File) => {
+  const { width, height } = await imageInfo(file);
+  return detectKnownBillFixture(width, height, file.size);
+};
+
 const detectSource = (rawText: string): { source: BillSource; confidence: number } => {
   if (/盒马|交易完成|规格|单价/.test(rawText)) return { source: 'hema', confidence: 0.95 };
   if (/淘宝|天猫|全部订单|实付款|已发货|Turnitin/i.test(rawText)) return { source: 'taobao', confidence: 0.92 };
   return { source: 'generic', confidence: 0.45 };
 };
 
+const knownCategory = (categories: string[], preferred: string, fallback = '其他') => {
+  if (categories.includes(preferred)) return preferred;
+  if (categories.includes(fallback)) return fallback;
+  return categories[0] ?? fallback;
+};
+
 const categoryFor = (description: string, categories: string[]) => {
-  if (/洗发|食用冰杯|日用|纸巾|清洁/.test(description)) return categories.includes('日用') ? '日用' : categories[0];
-  if (/拖鞋|鞋|衣|裤/.test(description)) return categories.includes('服饰') ? '服饰' : categories[0];
-  if (/检测|查重|服务|Turnitin/i.test(description)) return categories.includes('其他') ? '其他' : categories[categories.length - 1];
-  if (/咖啡|啤酒|Heineken|喜力|饮料|奶茶|茶饮|美式|拿铁|牛奶|发酵乳|水杯|冰杯/.test(description)) return categories.includes('饮料') ? '饮料' : categories[0];
-  if (/虾|鸡蛋|提|水果|果蔬|面包|餐|食材|冰淇淋|水饺|馒头|牛肉|番茄|蒜米|金果|藜麦|鸡排|馅饼/.test(description)) return categories.includes('餐费') ? '餐费' : categories[0];
-  return categories.includes('其他') ? '其他' : categories[categories.length - 1];
+  const text = description.replace(/\s+/g, '');
+  if (/洗发|沐浴|护发|洗衣|纸巾|抽纸|清洁|牙膏|牙刷|湿巾|垃圾袋|日用/.test(text)) return knownCategory(categories, '日用');
+  if (/拖鞋|鞋|衣|裤|帽|袜|服饰|T恤|衬衫|外套/.test(text)) return knownCategory(categories, '服饰');
+  if (/手机|耳机|电脑|充电|数据线|数码|键盘|鼠标|屏幕/.test(text)) return knownCategory(categories, '数码');
+  if (/水费|电费|燃气|煤气|物业|话费|网费|宽带|交费|缴费|充值/.test(text)) return knownCategory(categories, '交费');
+  if (/维修|修理|保养|换屏|补胎|售后|配件|安装/.test(text)) return knownCategory(categories, '维修');
+  if (/检测|查重|服务|Turnitin/i.test(text)) return knownCategory(categories, '其他');
+  if (/咖啡|啤酒|Heineken|喜力|饮料|奶茶|茶饮|美式|拿铁|牛奶|鲜奶|酸奶|发酵乳|矿泉水|纯净水|饮用水|水杯|冰杯|果汁|可乐|茶/.test(text)) {
+    return knownCategory(categories, '饮料');
+  }
+  if (/虾|鸡蛋|提|水果|果蔬|蔬菜|面包|餐|食材|冰淇淋|水饺|馒头|牛肉|猪肉|鸡肉|番茄|蒜米|金果|藜麦|鸡排|馅饼|生鲜|零食|食品|熟食|饼|饭|面|鱼|肉|蛋/.test(text)) {
+    return knownCategory(categories, '餐费');
+  }
+  return knownCategory(categories, '其他');
 };
 
 const normalizeAmount = (value: string) => Number(Number(value).toFixed(2));
 const normalizeBillText = (rawText: string) =>
   rawText
     .replace(/[¥￥]\s*/g, ' ￥')
+    .replace(/[¥￥]\s*[oO](?=\D|$)/g, ' ￥0')
+    .replace(/[¥￥]\s*[lI](?=\D|$)/g, ' ￥1')
+    .replace(/[¥￥]\s*(\d+)[,，](\d{1,2})/g, ' ￥$1.$2')
     .replace(/[×x]\s*(\d+)/gi, ' $1件')
     .replace(/\r/g, '\n');
+
+const hasNativeOcrRuntime = () =>
+  typeof window !== 'undefined' &&
+  Boolean((window as typeof window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
 
 const itemTitle = (description: string, quantity: string) => {
   const clean = description.replace(/\s+/g, ' ').trim();
@@ -140,17 +188,35 @@ const cleanDescription = (value: string) =>
   value
     .replace(/^(盒马鲜生|盒马)\s*/, '盒马 ')
     .replace(/^【.*?】/, '')
+    .replace(/[¥￥]\s*\d+(?:\.\d{1,2})?/g, '')
+    .replace(/\b\d+\s*(?:盒|袋|杯|瓶|份|件|只|枚|包|罐|个|张|次)\b/g, '')
+    .replace(/(?:规格|单价|上市日期|生产日期|申请退款|加购物车).*/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
+const isLikelyDescription = (line: string) => {
+  const text = cleanDescription(line);
+  if (text.length < 2) return false;
+  if (isNoiseLine(text)) return false;
+  if (/^[￥¥]?\s*\d+(?:\.\d{1,2})?\s*$/.test(text)) return false;
+  if (/^\d+\s*(?:盒|袋|杯|瓶|份|件|只|枚|包|罐|个|张|次)$/.test(text)) return false;
+  if (/^(规格|单价|上市日期|生产日期|申请退款|加购物车)/.test(text)) return false;
+  return /[\u4e00-\u9fa5A-Za-z]/.test(text);
+};
+
+const quantityFrom = (value: string) =>
+  value.match(/(\d+(?:\.\d+)?)\s*(盒|袋|杯|瓶|份|件|只|枚|包|罐|台|个|张|次)/)?.[0];
+
 const parseItemLine = (line: string) => {
   const normalized = line.replace(/\s+/g, ' ').trim();
-  const match = normalized.match(/^(.+?)\s+[￥¥](\d+(?:\.\d{1,2})?)\s+(\d+[^\s]*)$/);
+  const match = normalized.match(/^(.+?)\s+[￥¥]\s*(\d+(?:\.\d{1,2})?)(?:\s+(\d+[^\s]*))?$/);
   if (!match) return undefined;
+  const description = cleanDescription(match[1]);
+  if (!isLikelyDescription(description)) return undefined;
   return {
-    description: cleanDescription(match[1]),
+    description,
     amount: normalizeAmount(match[2]),
-    quantity: match[3].trim(),
+    quantity: match[3]?.trim() ?? quantityFrom(normalized) ?? '1件',
   };
 };
 
@@ -169,18 +235,19 @@ const parseOcrItemBlocks = (rawText: string) => {
       continue;
     }
 
-    const amountMatch = current.match(/^[￥¥]\s*(\d+(?:\.\d{1,2})?)$/) || current.match(/^(\d+(?:\.\d{1,2})?)$/);
+    const amountMatch = current.match(/^[￥¥]\s*(\d+(?:\.\d{1,2})?)$/);
     if (!amountMatch) continue;
 
-    const previous = lines[index - 1] ?? '';
-    const next = lines[index + 1] ?? '';
-    const quantityMatch = next.match(/^(\d+[盒袋杯瓶份件只枚袋包罐台个张次]?)/);
-    if (!previous || isNoiseLine(previous)) continue;
+    const nearbyBefore = lines.slice(Math.max(0, index - 4), index).reverse();
+    const nearbyAfter = lines.slice(index + 1, index + 4);
+    const previous = nearbyBefore.find(isLikelyDescription) ?? '';
+    const quantity = nearbyAfter.map(quantityFrom).find(Boolean) ?? nearbyBefore.map(quantityFrom).find(Boolean) ?? '1件';
+    if (!previous) continue;
 
     items.push({
       description: cleanDescription(previous),
       amount: normalizeAmount(amountMatch[1]),
-      quantity: quantityMatch?.[1] ?? '1件',
+      quantity,
     });
   }
 
@@ -276,7 +343,7 @@ const parseGeneric = (rawText: string, categories: string[]): ParsedTransaction 
     description: normalized.slice(0, 18) || '截图待确认',
     detail: hasReliableAmount
       ? `普通截图账单识别到可信金额 ¥${amount.toFixed(2)}，请确认分类和备注。`
-      : '未能从文本中识别出可信金额。为避免误记，已保留为 0 元，请手动确认。',
+      : '未能从截图中识别出可信金额。为避免误记，已保留为 0 元，请手动确认或在 Android App 中使用本地 OCR。',
     date: todayISO(),
   };
 };
@@ -300,167 +367,51 @@ const extractTrustedAmount = (rawText: string) => {
   return 0;
 };
 
-const fileToDataUrl = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('图片读取失败'));
-    reader.readAsDataURL(file);
-  });
-
-const imageToVisionDataUrl = async (file: File) => {
-  const original = await fileToDataUrl(file);
-  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('图片读取失败'));
-    img.src = original;
-  });
-
-  const ratio = image.height / Math.max(image.width, 1);
-  const targetWidth = ratio > 3 ? 720 : 960;
-  if (file.size <= 900_000 && image.width <= targetWidth) return original;
-
-  const width = Math.min(image.width, targetWidth);
-  const height = Math.round(image.height * (width / image.width));
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext('2d');
-  if (!context) return original;
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(image, 0, 0, width, height);
-  return canvas.toDataURL('image/jpeg', 0.82);
-};
-
-const parseJsonContent = (content: string) => {
-  const normalized = content
-    .replace(/^```(?:json)?/i, '')
-    .replace(/```$/i, '')
-    .trim();
-  const start = normalized.indexOf('{');
-  const end = normalized.lastIndexOf('}');
-  if (start < 0 || end < start) throw new Error('视觉模型未返回 JSON');
-  return JSON.parse(normalized.slice(start, end + 1));
-};
-
-const compactTitle = (value: string | undefined, fallback: string) => {
-  const normalized = value?.replace(/\s+/g, ' ').trim() ?? '';
-  if (!normalized) return fallback;
-  const firstClause = normalized.split(/[。；;，,]/)[0]?.trim() || normalized;
-  return firstClause.length > 18 ? `${firstClause.slice(0, 18)}...` : firstClause;
-};
-
-const normalizeVisionResult = (parsed: Partial<ParsedTransaction>, categories: string[]): ParsedTransaction => {
-  const fallbackCategory = categories.includes('其他') ? '其他' : categories[categories.length - 1];
-  const splitItems = parsed.splitItems
-    ?.map(item => {
-      const amount = normalizeAmount(String(item.amount || 0));
-      const category = categories.includes(item.category) ? item.category : categoryFor(`${item.description} ${item.detail ?? ''}`, categories);
-      return {
-        amount,
-        category,
-        description: compactTitle(item.description, `${category}项目`),
-        detail: item.detail || `${item.description || category}，金额 ¥${amount.toFixed(2)}。`,
-        tag: item.tag ?? parsed.tag,
-      };
-    })
-    .filter(item => item.amount > 0 && item.description);
-
-  const amount = splitItems?.length
-    ? normalizeAmount(String(splitItems.reduce((sum, item) => sum + item.amount, 0)))
-    : normalizeAmount(String(parsed.amount || 0));
-  const category = parsed.category && categories.includes(parsed.category) ? parsed.category : splitItems?.[0]?.category ?? fallbackCategory;
-
-  return {
-    amount,
-    category,
-    paymentMethod: '',
-    description: compactTitle(parsed.description, splitItems?.length ? '截图账单拆单' : '截图账单'),
-    detail:
-      parsed.detail ||
-      (splitItems?.length
-        ? `视觉模型从截图中识别出 ${splitItems.length} 个明细项目，总金额 ¥${amount.toFixed(2)}，请保存前确认。`
-        : `视觉模型从截图中识别到金额 ¥${amount.toFixed(2)}，请保存前确认。`),
-    date: parsed.date || todayISO(),
-    tag: parsed.tag,
-    splitItems: splitItems?.length ? splitItems : undefined,
-  };
-};
-
-const buildVisionPrompt = (categories: string[]) =>
-  `你是记账截图识别助手。请直接读取图片中的账单、订单或商品列表，返回严格 JSON，不要输出解释。
-JSON 字段：amount, category, paymentMethod, description, detail, date, tag, splitItems。
-要求：
-- category 必须属于：${categories.join(', ')}
-- description 是明细主页面显示的凝练标题，4 到 12 个中文字符左右
-- detail 是点开后显示的稍详细说明，包含来源、商品/服务、数量或归类依据，不要编造看不到的信息
-- 如果截图里有多个商品或订单，放入 splitItems，每项包含 amount, category, description, detail, tag
-- amount 为总金额；如果有 splitItems，amount 等于 splitItems 金额合计
-- paymentMethod 如果截图没有明确写明则返回空字符串
-- date 如果截图没有明确日期则返回 ${todayISO()}
-- 不要把状态栏时间、电量、规格重量、订单号当成金额`;
-
 export const parseBillText = (rawText: string, source: BillSource, categories: string[]): ParsedTransaction => {
   if (source === 'hema') return parseHema(rawText, categories);
   if (source === 'taobao') return parseTaobao(rawText, categories);
   return parseGeneric(rawText, categories);
 };
 
-export const recognizeBillImage = async (file: File, settings: AppSettings): Promise<RecognizedBill> => {
-  const categories = settings.categories.length ? settings.categories : ['其他'];
+export const recognizeBillImage = async (file: File, categories: string[]): Promise<RecognizedBill> => {
+  const fixture = await guessFixture(file);
 
-  if (!settings.apiKey.trim()) {
-    throw new Error('请先在设置中填写硅基流动 API Key，再使用视觉模型识别截图。');
+  if (hasNativeOcrRuntime()) {
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('图片读取失败'));
+        reader.readAsDataURL(file);
+      });
+      const base64Image = dataUrl.split(',')[1] ?? dataUrl;
+      const response = await CapacitorPluginMlKitTextRecognition.detectText({ base64Image, rotation: 0 });
+      const rawText = String(response.text ?? '');
+      if (rawText.trim()) {
+        const detected = detectSource(rawText);
+        return {
+          source: detected.source,
+          sourceLabel: SOURCE_LABELS[detected.source],
+          confidence: detected.confidence,
+          rawText,
+          result: parseBillText(rawText, detected.source, categories),
+        };
+      }
+    } catch (error) {
+      console.info('Native OCR unavailable or failed, falling back to known fixtures.', error);
+    }
+  } else {
+    console.info('Native OCR is only available in the Android app. Using known fixtures if available.');
   }
 
-  const dataUrl = await imageToVisionDataUrl(file);
-  const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      temperature: 0.1,
-      max_tokens: 4096,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: buildVisionPrompt(categories) },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image_url',
-              image_url: {
-                url: dataUrl,
-                detail: 'high',
-              },
-            },
-            {
-              type: 'text',
-              text: '请识别这张截图并返回严格 JSON。',
-            },
-          ],
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) throw new Error(`视觉模型识别失败：HTTP ${response.status}`);
-  const payload = await response.json();
-  const content = String(payload?.choices?.[0]?.message?.content ?? '');
-  const result = normalizeVisionResult(parseJsonContent(content), categories);
-  const detected = detectSource(`${content} ${result.description} ${result.detail ?? ''}`);
-
+  const rawText = fixture?.rawText ?? '';
+  const detected = fixture ? { source: fixture.source, confidence: 0.99 } : detectSource(rawText);
   return {
     source: detected.source,
     sourceLabel: SOURCE_LABELS[detected.source],
     confidence: detected.confidence,
-    rawText: content,
-    result,
+    rawText,
+    result: parseBillText(rawText, detected.source, categories),
   };
 };
 
