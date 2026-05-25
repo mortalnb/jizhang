@@ -112,11 +112,14 @@ const categoryFor = (description: string, categories: string[]) => {
   if (/洗发|食用冰杯|日用|纸巾|清洁/.test(description)) return categories.includes('日用') ? '日用' : categories[0];
   if (/拖鞋|鞋|衣|裤/.test(description)) return categories.includes('服饰') ? '服饰' : categories[0];
   if (/检测|查重|服务|Turnitin/i.test(description)) return categories.includes('其他') ? '其他' : categories[categories.length - 1];
-  if (/虾|鸡蛋|提|冰|咖啡|啤酒|Heineken|喜力|面包|餐/.test(description)) return categories.includes('餐饮') ? '餐饮' : categories[0];
+  if (/咖啡|啤酒|Heineken|喜力|饮料|奶茶|茶饮|美式|拿铁/.test(description)) return categories.includes('饮料') ? '饮料' : categories[0];
+  if (/虾|鸡蛋|提|水果|果蔬|面包|餐|食材/.test(description)) return categories.includes('餐费') ? '餐费' : categories[0];
   return categories.includes('其他') ? '其他' : categories[categories.length - 1];
 };
 
 const normalizeAmount = (value: string) => Number(Number(value).toFixed(2));
+const billDetail = (sourceLabel: string, description: string, amount: number) =>
+  `${sourceLabel}截图拆单识别：${description}，金额 ¥${amount.toFixed(2)}，分类由商品关键词自动匹配。`;
 
 const parseHema = (rawText: string, categories: string[]): ParsedTransaction => {
   const itemPattern = /^(.+?)\s+￥(\d+(?:\.\d{1,2})?)\s+\d+[^\s]*$/gm;
@@ -128,6 +131,7 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
       amount,
       category: categoryFor(description, categories),
       description,
+      detail: billDetail('盒马鲜生', description, amount),
       tag: '#盒马周购',
     });
   }
@@ -135,9 +139,10 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
   const total = normalizeAmount(String(splitItems.reduce((sum, item) => sum + item.amount, 0)));
   return {
     amount: total,
-    category: categories.includes('餐饮') ? '餐饮' : categories[0],
+    category: categories.includes('餐费') ? '餐费' : categories[0],
     paymentMethod: '支付宝',
     description: '盒马鲜生周购拆单',
+    detail: `盒马鲜生截图自动拆单，共识别 ${splitItems.length} 个商品项目，总金额 ¥${total.toFixed(2)}。`,
     date: todayISO(),
     tag: '#盒马周购',
     splitItems,
@@ -161,6 +166,7 @@ const parseTaobao = (rawText: string, categories: string[]): ParsedTransaction =
       amount,
       category: categoryFor(description, categories),
       description: isDuplicateSummary ? description : description,
+      detail: billDetail('淘宝/天猫', description, amount),
       tag: '#淘宝网购',
     });
   }
@@ -171,6 +177,7 @@ const parseTaobao = (rawText: string, categories: string[]): ParsedTransaction =
     category: categories.includes('其他') ? '其他' : categories[categories.length - 1],
     paymentMethod: '支付宝',
     description: '淘宝天猫订单拆单',
+    detail: `淘宝/天猫截图自动拆单，共识别 ${splitItems.length} 个订单项目，总金额 ¥${total.toFixed(2)}。`,
     date: todayISO(),
     tag: '#淘宝网购',
     splitItems,
@@ -186,6 +193,7 @@ const parseGeneric = (rawText: string, categories: string[]): ParsedTransaction 
     category: fallback,
     paymentMethod: '微信支付',
     description: rawText.slice(0, 18) || '截图账单',
+    detail: rawText ? `普通截图账单识别到金额 ¥${amount.toFixed(2)}，请确认分类和备注。` : '未能识别出明确账单内容，请手动补充金额、分类和备注。',
     date: todayISO(),
   };
 };

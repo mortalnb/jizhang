@@ -5,6 +5,7 @@ export interface Transaction {
   date: string;
   paymentMethod: string;
   description: string;
+  detail?: string;
   tag?: string;
 }
 
@@ -20,6 +21,7 @@ export interface SplitItem {
   amount: number;
   category: string;
   description: string;
+  detail?: string;
   tag?: string;
 }
 
@@ -28,6 +30,7 @@ export interface ParsedTransaction {
   category: string;
   paymentMethod: string;
   description: string;
+  detail?: string;
   date: string;
   tag?: string;
   splitItems?: SplitItem[];

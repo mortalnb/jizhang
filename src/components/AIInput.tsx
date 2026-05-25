@@ -73,6 +73,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
           date: parsedCard.date,
           paymentMethod: parsedCard.paymentMethod,
           description: item.description,
+          detail: item.detail ?? parsedCard.detail,
           tag: item.tag ?? parsedCard.tag,
         });
       });
@@ -83,6 +84,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
         date: parsedCard.date,
         paymentMethod: parsedCard.paymentMethod,
         description: parsedCard.description,
+        detail: parsedCard.detail,
         tag: parsedCard.tag,
       });
     }

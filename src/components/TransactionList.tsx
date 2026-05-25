@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Calendar, ChevronDown, ChevronUp, CreditCard, Search, ShoppingBag, Tag, Trash2, X } from 'lucide-react';
+import { Calendar, CheckSquare, ChevronDown, ChevronUp, CreditCard, Search, ShoppingBag, Square, Tag, Trash2, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { formatShortDate } from '../services/date';
 import { storage } from '../services/storage';
@@ -11,10 +11,17 @@ interface TransactionListProps {
 
 export function TransactionList({ onTransactionDeleted }: TransactionListProps) {
   const [list, setList] = useState(() => storage.getTransactions());
-  const [categories] = useState(() => storage.getSettings().categories);
+  const [settingsCategories] = useState(() => storage.getSettings().categories);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('全部');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [managing, setManaging] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const categories = useMemo(() => {
+    const historicalCategories = list.map(item => item.category);
+    return Array.from(new Set([...settingsCategories, ...historicalCategories]));
+  }, [list, settingsCategories]);
 
   const filteredList = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -40,6 +47,29 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
     }, {});
   }, [filteredList]);
 
+  const allVisibleSelected = filteredList.length > 0 && filteredList.every(item => selectedIds.includes(item.id));
+
+  const toggleManaging = () => {
+    setManaging(current => !current);
+    setSelectedIds([]);
+    setExpandedId(null);
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds(current => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]));
+  };
+
+  const toggleSelectVisible = () => {
+    setSelectedIds(current => {
+      const visibleIds = filteredList.map(item => item.id);
+      if (visibleIds.length === 0) return current;
+      if (visibleIds.every(id => current.includes(id))) {
+        return current.filter(id => !visibleIds.includes(id));
+      }
+      return Array.from(new Set([...current, ...visibleIds]));
+    });
+  };
+
   const deleteItem = (id: string) => {
     if (!window.confirm('确定要删除这笔记录吗？')) return;
     storage.deleteTransaction(id);
@@ -48,13 +78,39 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
     onTransactionDeleted();
   };
 
+  const deleteSelected = () => {
+    if (!selectedIds.length) return;
+    if (!window.confirm(`确定要删除选中的 ${selectedIds.length} 条记录吗？此操作不可撤销。`)) return;
+    storage.deleteTransactions(selectedIds);
+    setList(storage.getTransactions());
+    setSelectedIds([]);
+    setManaging(false);
+    setExpandedId(null);
+    onTransactionDeleted();
+  };
+
   return (
     <div className="w-full max-w-md mx-auto p-4 space-y-5 animate-slide-up pb-24">
       <section className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          账单明细 <ShoppingBag size={18} className="text-brand-purple" />
-        </h1>
-        <p className="text-xs text-dark-muted">搜索、筛选并管理所有本地消费记录。</p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              账单明细 <ShoppingBag size={18} className="text-brand-purple" />
+            </h1>
+            <p className="text-xs text-dark-muted">搜索、筛选并管理所有本地消费记录。</p>
+          </div>
+          <button
+            type="button"
+            onClick={toggleManaging}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all active:scale-95 ${
+              managing
+                ? 'bg-black/[0.05] border-black/[0.08] text-dark-muted'
+                : 'bg-brand-purple/10 border-brand-purple/20 text-brand-purple'
+            }`}
+          >
+            {managing ? '完成' : '管理'}
+          </button>
+        </div>
       </section>
 
       <section className="space-y-3">
@@ -91,6 +147,29 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
             </button>
           ))}
         </div>
+
+        {managing && (
+          <div className="glass-panel rounded-xl border border-black/[0.08] bg-white/50 p-2.5 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={toggleSelectVisible}
+              disabled={filteredList.length === 0}
+              className="px-3 py-2 rounded-lg bg-black/[0.03] border border-black/[0.06] text-xs font-semibold text-dark-muted disabled:opacity-40 flex items-center gap-1.5"
+            >
+              {allVisibleSelected ? <CheckSquare size={14} /> : <Square size={14} />}
+              {allVisibleSelected ? '取消全选' : '全选当前'}
+            </button>
+            <button
+              type="button"
+              onClick={deleteSelected}
+              disabled={selectedIds.length === 0}
+              className="px-3 py-2 rounded-lg bg-brand-rose/10 border border-brand-rose/20 text-xs font-bold text-brand-rose disabled:opacity-40 flex items-center gap-1.5"
+            >
+              <Trash2 size={14} />
+              删除 {selectedIds.length ? selectedIds.length : ''}
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="space-y-4">
@@ -115,14 +194,20 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                 <div className="glass-panel rounded-2xl overflow-hidden divide-y divide-black/[0.05]">
                   {grouped[date].items.map(item => {
                     const expanded = expandedId === item.id;
+                    const selected = selectedIds.includes(item.id);
                     return (
                       <article key={item.id}>
                         <button
                           type="button"
-                          onClick={() => setExpandedId(expanded ? null : item.id)}
+                          onClick={() => (managing ? toggleSelected(item.id) : setExpandedId(expanded ? null : item.id))}
                           className={`w-full p-3.5 flex items-center justify-between hover:bg-black/[0.02] transition-all text-left ${expanded ? 'bg-black/[0.01]' : ''}`}
                         >
                           <div className="flex items-center gap-3 min-w-0 flex-1">
+                            {managing && (
+                              <span className={`shrink-0 ${selected ? 'text-brand-purple' : 'text-dark-muted'}`}>
+                                {selected ? <CheckSquare size={18} /> : <Square size={18} />}
+                              </span>
+                            )}
                             <div className="w-10 h-10 rounded-xl bg-black/[0.04] flex items-center justify-center text-lg shadow-inner shrink-0">
                               {getCategoryEmoji(item.category)}
                             </div>
@@ -140,13 +225,13 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                           </div>
                           <div className="flex items-center gap-2.5 shrink-0">
                             <span className="text-xs font-bold tracking-wide font-mono">-¥{item.amount.toFixed(2)}</span>
-                            <span className="text-dark-muted">{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
+                            {!managing && <span className="text-dark-muted">{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>}
                           </div>
                         </button>
 
-                        <div className={`overflow-hidden transition-all duration-300 ${expanded ? 'max-h-64 border-t border-black/[0.05] bg-black/[0.01]' : 'max-h-0'}`}>
+                        <div className={`overflow-hidden transition-all duration-300 ${expanded ? 'max-h-96 border-t border-black/[0.05] bg-black/[0.01]' : 'max-h-0'}`}>
                           <div className="p-4 space-y-3.5">
-                            <p className="text-xs leading-relaxed font-medium bg-dark-surface border border-black/[0.06] rounded-xl p-2.5 select-text">{item.description}</p>
+                            <p className="text-xs leading-relaxed font-medium bg-dark-surface border border-black/[0.06] rounded-xl p-2.5 select-text">{item.detail || item.description}</p>
                             <div className="grid grid-cols-2 gap-2">
                               <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类" value={`${getCategoryEmoji(item.category)} ${item.category}`} />
                               <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={item.paymentMethod} />

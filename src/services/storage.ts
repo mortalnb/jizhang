@@ -1,10 +1,11 @@
 import { DEFAULT_CATEGORIES } from '../data/categories';
 import type { AppSettings, Transaction } from '../types';
-import { todayISO } from './date';
 
 const TRANSACTIONS_KEY = 'ab_transactions';
 const SETTINGS_KEY = 'ab_settings';
 const SCHEMA_KEY = 'ab_schema_version';
+const CURRENT_SCHEMA_VERSION = '2';
+const SEED_ID_PATTERN = /^seed-00[1-9]$/;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
@@ -14,23 +15,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
   categories: DEFAULT_CATEGORIES,
 };
 
-const daysAgo = (days: number) => {
-  const date = new Date(todayISO());
-  date.setDate(date.getDate() - days);
-  return date.toISOString().slice(0, 10);
+const migrateCategories = (categories?: string[]) => {
+  const source = categories?.length ? categories : DEFAULT_CATEGORIES;
+  const migrated = source.flatMap(category => (category === '餐饮' ? ['餐费', '饮料'] : [category]));
+  const unique = Array.from(new Set(migrated.filter(Boolean)));
+  const withoutRequired = unique.filter(category => category !== '交费' && category !== '维修');
+  const otherIndex = withoutRequired.indexOf('其他');
+  const required = ['交费', '维修'];
+  if (otherIndex >= 0) {
+    return [...withoutRequired.slice(0, otherIndex), ...required, ...withoutRequired.slice(otherIndex)];
+  }
+  return [...withoutRequired, ...required];
 };
 
-const createSeedTransactions = (): Transaction[] => [
-  { id: 'seed-001', amount: 25, category: '餐饮', date: daysAgo(0), paymentMethod: '微信支付', description: '麦当劳午餐' },
-  { id: 'seed-002', amount: 15, category: '交通', date: daysAgo(0), paymentMethod: '支付宝', description: '打车回家' },
-  { id: 'seed-003', amount: 89, category: '餐饮', date: daysAgo(1), paymentMethod: '支付宝', description: '盒马鲜生面包零食', tag: '#盒马周购' },
-  { id: 'seed-004', amount: 61, category: '日用', date: daysAgo(1), paymentMethod: '支付宝', description: '盒马鲜生纸巾洗护', tag: '#盒马周购' },
-  { id: 'seed-005', amount: 49, category: '日用', date: daysAgo(2), paymentMethod: '微信支付', description: '生活用品补给' },
-  { id: 'seed-006', amount: 199, category: '服饰', date: daysAgo(7), paymentMethod: '微信支付', description: '优衣库 T 恤' },
-  { id: 'seed-007', amount: 38, category: '交通', date: daysAgo(9), paymentMethod: '支付宝', description: '雨天网约车' },
-  { id: 'seed-008', amount: 99, category: '娱乐', date: daysAgo(15), paymentMethod: '微信支付', description: '游戏道具充值' },
-  { id: 'seed-009', amount: 899, category: '数码', date: daysAgo(85), paymentMethod: '支付宝', description: '降噪耳机' },
-];
+const migrateTransactions = (transactions: Transaction[]) =>
+  transactions.filter(item => !SEED_ID_PATTERN.test(item.id));
 
 const readJSON = <T,>(key: string, fallback: T): T => {
   try {
@@ -44,21 +43,25 @@ const readJSON = <T,>(key: string, fallback: T): T => {
 const normalizeSettings = (settings: AppSettings): AppSettings => ({
   ...DEFAULT_SETTINGS,
   ...settings,
-  categories: settings.categories?.length ? settings.categories : DEFAULT_CATEGORIES,
+  categories: migrateCategories(settings.categories),
 });
 
 export const storage = {
   getTransactions(): Transaction[] {
     const raw = localStorage.getItem(TRANSACTIONS_KEY);
     if (!raw) {
-      const seed = createSeedTransactions();
-      localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(seed));
-      localStorage.setItem(SCHEMA_KEY, '1');
-      return seed;
+      localStorage.setItem(SCHEMA_KEY, CURRENT_SCHEMA_VERSION);
+      return [];
     }
 
     try {
-      return JSON.parse(raw) as Transaction[];
+      const parsed = JSON.parse(raw) as Transaction[];
+      const migrated = migrateTransactions(parsed);
+      if (migrated.length !== parsed.length || localStorage.getItem(SCHEMA_KEY) !== CURRENT_SCHEMA_VERSION) {
+        localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(migrated));
+        localStorage.setItem(SCHEMA_KEY, CURRENT_SCHEMA_VERSION);
+      }
+      return migrated;
     } catch {
       return [];
     }
@@ -78,6 +81,12 @@ export const storage = {
 
   deleteTransaction(id: string) {
     const updated = this.getTransactions().filter(item => item.id !== id);
+    localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(updated));
+  },
+
+  deleteTransactions(ids: string[]) {
+    const idSet = new Set(ids);
+    const updated = this.getTransactions().filter(item => !idSet.has(item.id));
     localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(updated));
   },
 
