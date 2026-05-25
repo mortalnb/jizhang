@@ -9,8 +9,8 @@ const SEED_ID_PATTERN = /^seed-00[1-9]$/;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
-  baseUrl: 'https://api.deepseek.com',
-  model: 'deepseek-v4-flash',
+  baseUrl: 'https://api.siliconflow.cn',
+  model: 'Qwen/Qwen3.6-27B',
   monthlyBudget: 3000,
   categories: DEFAULT_CATEGORIES,
 };
