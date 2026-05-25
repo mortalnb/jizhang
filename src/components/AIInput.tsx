@@ -6,6 +6,8 @@ import { parseBillText, recognizeBillImage, sourceOptions, type BillSource, type
 import { storage } from '../services/storage';
 import type { ParsedTransaction, SplitItem } from '../types';
 
+const PAYMENT_OPTIONS = ['微信支付', '支付宝', '银行卡', '现金'];
+
 interface AIInputProps {
   onTransactionSaved: () => void;
   onNavigateToTransactions: () => void;
@@ -28,7 +30,8 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     setParsedCard(null);
     try {
       setRecognizedBill(null);
-      setParsedCard(await aiParser.parse(text, settings));
+      const result = await aiParser.parse(text, settings);
+      setParsedCard({ ...result, paymentMethod: '' });
     } finally {
       setLoading(false);
     }
@@ -41,8 +44,9 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     setRecognizedBill(null);
     try {
       const bill = await recognizeBillImage(file, categories);
-      setRecognizedBill(bill);
-      setParsedCard(bill.result);
+      const result = { ...bill.result, paymentMethod: '' };
+      setRecognizedBill({ ...bill, result });
+      setParsedCard(result);
     } finally {
       setLoading(false);
     }
@@ -50,7 +54,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
 
   const switchBillSource = (source: BillSource) => {
     if (!recognizedBill) return;
-    const result = parseBillText(recognizedBill.rawText, source, categories);
+    const result = { ...parseBillText(recognizedBill.rawText, source, categories), paymentMethod: parsedCard?.paymentMethod ?? '' };
     const sourceLabel = sourceOptions.find(option => option.value === source)?.label ?? '普通账单';
     const next = {
       ...recognizedBill,
@@ -244,6 +248,21 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
             </FieldLabel>
           </div>
 
+          <FieldLabel label="支付方式（可选）" icon={<CreditCard size={12} />}>
+            <select
+              value={parsedCard.paymentMethod}
+              onChange={event => setParsedCard({ ...parsedCard, paymentMethod: event.target.value })}
+              className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 focus:outline-none h-[40px]"
+            >
+              <option value="">不记录支付方式</option>
+              {PAYMENT_OPTIONS.map(option => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </FieldLabel>
+
           {parsedCard.splitItems?.length ? (
             <div className="space-y-3">
               <p className="text-xs text-brand-neon font-bold">智能拆单明细</p>
@@ -271,7 +290,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
           ) : (
             <div className="space-y-4">
               <CategoryPicker categories={categories} value={parsedCard.category} onChange={category => setParsedCard({ ...parsedCard, category })} />
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3">
                 <FieldLabel label="备注" icon={<Tag size={12} />}>
                   <input
                     type="text"
@@ -279,18 +298,6 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
                     onChange={event => setParsedCard({ ...parsedCard, description: event.target.value })}
                     className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 focus:outline-none"
                   />
-                </FieldLabel>
-                <FieldLabel label="支付方式" icon={<CreditCard size={12} />}>
-                  <select
-                    value={parsedCard.paymentMethod}
-                    onChange={event => setParsedCard({ ...parsedCard, paymentMethod: event.target.value })}
-                    className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 focus:outline-none h-[38px]"
-                  >
-                    <option>微信支付</option>
-                    <option>支付宝</option>
-                    <option>银行卡</option>
-                    <option>现金</option>
-                  </select>
                 </FieldLabel>
               </div>
             </div>

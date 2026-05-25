@@ -30,8 +30,9 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
       const matchesSearch =
         !keyword ||
         item.description.toLowerCase().includes(keyword) ||
+        item.detail?.toLowerCase().includes(keyword) ||
         item.category.toLowerCase().includes(keyword) ||
-        item.paymentMethod.toLowerCase().includes(keyword) ||
+        item.paymentMethod?.toLowerCase().includes(keyword) ||
         item.amount.toString().includes(keyword) ||
         item.tag?.toLowerCase().includes(keyword);
       return matchesCategory && matchesSearch;
@@ -195,6 +196,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                   {grouped[date].items.map(item => {
                     const expanded = expandedId === item.id;
                     const selected = selectedIds.includes(item.id);
+                    const title = transactionTitle(item);
                     return (
                       <article key={item.id}>
                         <button
@@ -213,13 +215,17 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                             </div>
                             <div className="space-y-1 min-w-0 flex-1 pr-2">
                               <div className="flex items-center gap-1.5">
-                                <h4 className="text-xs font-semibold truncate leading-tight flex-1">{item.description}</h4>
+                                <h4 className="text-xs font-semibold truncate leading-tight flex-1">{title}</h4>
                                 {item.tag && <span className="text-[9px] font-bold text-brand-purple bg-brand-purple/10 border border-brand-purple/20 px-1.5 py-0.5 rounded shrink-0">{item.tag}</span>}
                               </div>
                               <div className="flex items-center gap-1.5 text-[10px] text-dark-muted">
                                 <span className="bg-black/[0.03] px-1.5 py-0.5 rounded border border-black/[0.05] shrink-0">{item.category}</span>
-                                <span>·</span>
-                                <span className="truncate">{item.paymentMethod}</span>
+                                {item.paymentMethod && (
+                                  <>
+                                    <span>·</span>
+                                    <span className="truncate">{item.paymentMethod}</span>
+                                  </>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -234,7 +240,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                             <p className="text-xs leading-relaxed font-medium bg-dark-surface border border-black/[0.06] rounded-xl p-2.5 select-text">{item.detail || item.description}</p>
                             <div className="grid grid-cols-2 gap-2">
                               <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类" value={`${getCategoryEmoji(item.category)} ${item.category}`} />
-                              <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={item.paymentMethod} />
+                              {item.paymentMethod && <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={item.paymentMethod} />}
                               <Detail icon={<Calendar size={14} className="text-brand-blue" />} label="日期" value={item.date} />
                               <Detail icon={<Tag size={14} className="text-brand-neon" />} label="标签" value={item.tag ?? '无'} />
                             </div>
@@ -259,6 +265,15 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
       </section>
     </div>
   );
+}
+
+function transactionTitle(item: Transaction) {
+  const raw = item.description.replace(/\s+/g, ' ').trim();
+  if (!raw || /根据|识别|归类|金额|原始描述|消费场景|拆单依据/.test(raw)) {
+    return `${item.category}支出`;
+  }
+  const firstClause = raw.split(/[。；;，,]/)[0]?.trim() || raw;
+  return firstClause.length > 14 ? `${firstClause.slice(0, 14)}...` : firstClause;
 }
 
 function Detail({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {

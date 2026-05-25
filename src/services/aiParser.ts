@@ -39,6 +39,15 @@ const extractAmount = (text: string) => {
   return match ? Number(match[1]) : 0;
 };
 
+const compactDescription = (value: string | undefined, category: string) => {
+  const normalized = value?.replace(/\s+/g, ' ').trim() ?? '';
+  const fallback = `${category}支出`;
+  if (!normalized) return fallback;
+  if (/根据|识别|归类|金额|原始描述|消费场景|拆单依据/.test(normalized)) return fallback;
+  const firstClause = normalized.split(/[。；;，,]/)[0]?.trim() || normalized;
+  return firstClause.length > 18 ? `${firstClause.slice(0, 18)}...` : firstClause;
+};
+
 const parseSplitItems = (text: string, categories: string[], tag?: string): SplitItem[] => {
   const normalized = text.replace(/[，；;]/g, ',');
   const parts = normalized.split(',').map(part => part.trim()).filter(Boolean);
@@ -48,7 +57,8 @@ const parseSplitItems = (text: string, categories: string[], tag?: string): Spli
     const description = match[1].replace(/^其中/, '').trim();
     const amount = Number(match[2]);
     if (!description || amount <= 0) return [];
-    return [{ amount, description, category: findCategory(description, categories), tag }];
+    const category = findCategory(description, categories);
+    return [{ amount, description: compactDescription(description, category), category, tag }];
   });
 
   return items.length > 1 ? items : [];
@@ -88,7 +98,7 @@ const localParse = (text: string, categories: string[]): ParsedTransaction => {
     amount,
     category,
     paymentMethod: detectPayment(text),
-    description: text.replace(/\s+/g, ' ').slice(0, 18) || `${category}支出`,
+    description: compactDescription(text, category),
     detail: buildDetail(text, category, amount),
     date: todayISO(),
     tag,
@@ -100,7 +110,7 @@ const normalizeRemoteResult = (parsed: Partial<ParsedTransaction>, text: string,
   const splitItems = parsed.splitItems?.map(item => ({
     amount: Number(item.amount) || 0,
     category: categories.includes(item.category) ? item.category : category,
-    description: item.description || '拆单项目',
+    description: compactDescription(item.description, categories.includes(item.category) ? item.category : category),
     detail: item.detail || parsed.detail,
     tag: item.tag ?? parsed.tag,
   }));
@@ -113,7 +123,7 @@ const normalizeRemoteResult = (parsed: Partial<ParsedTransaction>, text: string,
     amount,
     category,
     paymentMethod: parsed.paymentMethod && PAYMENT_METHODS.includes(parsed.paymentMethod) ? parsed.paymentMethod : detectPayment(text),
-    description: parsed.description || text.slice(0, 18) || `${category}支出`,
+    description: compactDescription(parsed.description || text, category),
     detail: parsed.detail || buildDetail(text, category, amount, splitItems?.length ?? 0),
     date: parsed.date || todayISO(),
     tag: parsed.tag,
@@ -143,7 +153,7 @@ export const aiParser = {
           messages: [
             {
               role: 'system',
-              content: `你是记账助手。请从用户输入中提取 JSON：amount, category, paymentMethod, description, detail, date, tag, splitItems。splitItems 的每一项可包含 amount, category, description, detail, tag。category 必须属于：${categories.join(', ')}。detail 用一句稍微更详细的中文说明消费场景、归类依据或拆单依据，避免编造不存在的商户和金额。今天是 ${todayISO()}。只返回 JSON。`,
+              content: `你是记账助手。请从用户输入中提取 JSON：amount, category, paymentMethod, description, detail, date, tag, splitItems。splitItems 的每一项可包含 amount, category, description, detail, tag。category 必须属于：${categories.join(', ')}。description 必须是适合账单列表展示的凝练标题，4 到 12 个中文字符左右，不要写解释。detail 用一句稍微更详细的中文说明消费场景、归类依据或拆单依据，避免编造不存在的商户和金额。今天是 ${todayISO()}。只返回 JSON。`,
             },
             { role: 'user', content: text },
           ],

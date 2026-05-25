@@ -41,6 +41,30 @@ const BILL_FIXTURES: BillFixture[] = [
 盒马 耶加雪菲美式咖啡 950ml ￥8.71 1瓶`,
   },
   {
+    source: 'hema',
+    sourceLabel: '盒马鲜生',
+    width: 1440,
+    height: 7611,
+    minSize: 4_250_000,
+    maxSize: 4_400_000,
+    rawText: `交易完成
+盒马鲜生
+蒙牛 随变 经典香草冰淇淋 70g ￥13.9 1盒
+盒马 食用冰杯 160g ￥6.6 3杯
+盒马 三色藜麦轻享鸡排 500g ￥13.2 1袋
+盒马 安格斯牛肉馅饼 360g ￥13.2 1袋
+盒马 鲅鱼水饺 480g(24只) ￥13.2 1盒
+高庄馒头 400g(4只) ￥2.63 1袋
+盒马工坊 五香牛肉 500g ￥52.71 1袋
+盒马 4.0高钙鲜牛奶 950ml ￥10.2 1盒
+盒马 0蔗糖风味发酵乳 原味 150g*5 ￥8.71 1袋
+盒马 大刀牛肉片150g ￥14.78 1袋
+盒马 可生食鸡蛋10枚 ￥8.71 1盒
+蒜米(净蒜瓣) 100g ￥3.51 1份
+高原冷凉菜 自然熟番茄 500g ￥10.47 1份
+佳沛 新西兰金果超大果2个 ￥13.99 1盒`,
+  },
+  {
     source: 'taobao',
     sourceLabel: '淘宝/天猫',
     width: 1440,
@@ -112,26 +136,35 @@ const categoryFor = (description: string, categories: string[]) => {
   if (/洗发|食用冰杯|日用|纸巾|清洁/.test(description)) return categories.includes('日用') ? '日用' : categories[0];
   if (/拖鞋|鞋|衣|裤/.test(description)) return categories.includes('服饰') ? '服饰' : categories[0];
   if (/检测|查重|服务|Turnitin/i.test(description)) return categories.includes('其他') ? '其他' : categories[categories.length - 1];
-  if (/咖啡|啤酒|Heineken|喜力|饮料|奶茶|茶饮|美式|拿铁/.test(description)) return categories.includes('饮料') ? '饮料' : categories[0];
-  if (/虾|鸡蛋|提|水果|果蔬|面包|餐|食材/.test(description)) return categories.includes('餐费') ? '餐费' : categories[0];
+  if (/咖啡|啤酒|Heineken|喜力|饮料|奶茶|茶饮|美式|拿铁|牛奶|发酵乳|水杯|冰杯/.test(description)) return categories.includes('饮料') ? '饮料' : categories[0];
+  if (/虾|鸡蛋|提|水果|果蔬|面包|餐|食材|冰淇淋|水饺|馒头|牛肉|番茄|蒜米|金果|藜麦|鸡排|馅饼/.test(description)) return categories.includes('餐费') ? '餐费' : categories[0];
   return categories.includes('其他') ? '其他' : categories[categories.length - 1];
 };
 
 const normalizeAmount = (value: string) => Number(Number(value).toFixed(2));
-const billDetail = (sourceLabel: string, description: string, amount: number) =>
-  `${sourceLabel}截图拆单识别：${description}，金额 ¥${amount.toFixed(2)}，分类由商品关键词自动匹配。`;
+const itemTitle = (description: string, quantity: string) => {
+  const clean = description.replace(/\s+/g, ' ').trim();
+  const quantityNumber = Number(quantity.match(/\d+(?:\.\d+)?/)?.[0] ?? 1);
+  return quantityNumber > 1 ? `${clean} x${quantityNumber}` : clean;
+};
+const billDetail = (sourceLabel: string, description: string, amount: number, quantity?: string) => {
+  const quantityText = quantity ? `，数量 ${quantity}` : '';
+  return `${sourceLabel}截图拆单识别：${description}${quantityText}，金额 ¥${amount.toFixed(2)}，分类由商品关键词自动匹配。`;
+};
 
 const parseHema = (rawText: string, categories: string[]): ParsedTransaction => {
-  const itemPattern = /^(.+?)\s+￥(\d+(?:\.\d{1,2})?)\s+\d+[^\s]*$/gm;
+  const itemPattern = /^(.+?)\s+[￥¥](\d+(?:\.\d{1,2})?)\s+(\d+[^\s]*)$/gm;
   const splitItems: SplitItem[] = [];
   for (const match of rawText.matchAll(itemPattern)) {
     const description = match[1].trim();
     const amount = normalizeAmount(match[2]);
+    const quantity = match[3].trim();
+    const title = itemTitle(description, quantity);
     splitItems.push({
       amount,
       category: categoryFor(description, categories),
-      description,
-      detail: billDetail('盒马鲜生', description, amount),
+      description: title,
+      detail: billDetail('盒马鲜生', description, amount, quantity),
       tag: '#盒马周购',
     });
   }
