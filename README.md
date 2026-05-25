@@ -69,7 +69,7 @@ android/app/build/outputs/apk/debug/app-debug.apk
 当前版本另存为：
 
 ```text
-jizhang-v1.1-debug.apk
+jizhang-v1.2-debug.apk
 ```
 
 ## Android 更新兼容
@@ -82,8 +82,8 @@ Android 是否识别为同一个 App 的更新，取决于：
 
 当前版本：
 
-- `versionCode`: `3`
-- `versionName`: `1.1`
+- `versionCode`: `4`
+- `versionName`: `1.2`
 
 ## 本地数据兼容
 
