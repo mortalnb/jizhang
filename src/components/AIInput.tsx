@@ -21,6 +21,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   const [parsedCard, setParsedCard] = useState<ParsedTransaction | null>(null);
   const [recognizedBill, setRecognizedBill] = useState<RecognizedBill | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMode, setLoadingMode] = useState<'image' | 'text'>('text');
   const [success, setSuccess] = useState(false);
 
   const normalizeCategory = (category: string, text = '') => {
@@ -47,6 +48,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
 
   const parse = async (text: string) => {
     if (!text.trim()) return;
+    setLoadingMode('text');
     setLoading(true);
     setSuccess(false);
     setParsedCard(null);
@@ -60,12 +62,13 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   };
 
   const recognizeImage = async (file: File) => {
+    setLoadingMode('image');
     setLoading(true);
     setSuccess(false);
     setParsedCard(null);
     setRecognizedBill(null);
     try {
-      const bill = await recognizeBillImage(file, categories);
+      const bill = await recognizeBillImage(file, categories, settings);
       const result = normalizeParsedCategories({ ...bill.result, paymentMethod: '' });
       setRecognizedBill({ ...bill, result });
       setParsedCard(result);
@@ -91,7 +94,24 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
 
   const save = () => {
     if (!parsedCard) return;
-    if (parsedCard.splitItems?.length) {
+    if (parsedCard.splitItems?.length && recognizedBill?.source === 'hema') {
+      const warnings = parsedCard.detail?.includes('需核对') ? [parsedCard.detail] : [];
+      storage.saveTransaction({
+        amount: parsedCard.amount,
+        category: parsedCard.category,
+        date: parsedCard.date,
+        paymentMethod: parsedCard.paymentMethod,
+        description: parsedCard.description,
+        detail: parsedCard.detail,
+        recognition: {
+          itemCount: parsedCard.splitItems.length,
+          source: recognizedBill.mode === 'vision' ? '视觉模型识别' : recognizedBill.mode === 'local-ocr' ? '本地 OCR 回退' : '样本规则识别',
+          warnings,
+        },
+        subItems: parsedCard.splitItems,
+        tag: parsedCard.tag,
+      });
+    } else if (parsedCard.splitItems?.length) {
       parsedCard.splitItems.forEach(item => {
         storage.saveTransaction({
           amount: item.amount,
@@ -190,7 +210,9 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
           <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-brand-purple to-brand-cyan flex items-center justify-center shadow-lg shadow-brand-purple/25">
             <Sparkles size={16} className="text-white animate-spin" />
           </div>
-          <p className="text-sm font-semibold">正在识别截图来源、提取商品和金额...</p>
+          <p className="text-sm font-semibold">
+            {loadingMode === 'image' ? '正在识别截图来源、提取商品和金额...' : '正在解析文字内容、提取金额和分类...'}
+          </p>
         </section>
       )}
 
@@ -213,8 +235,11 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
               <span className="text-sm font-bold text-brand-purple">解析结果确认</span>
               {recognizedBill && (
                 <p className="text-[10px] text-dark-muted">
-                  自动识别：{recognizedBill.sourceLabel} · 置信度 {(recognizedBill.confidence * 100).toFixed(0)}%
+                  自动识别：{recognizedBill.sourceLabel} · {recognizedBill.mode === 'vision' ? '视觉模型识别' : recognizedBill.mode === 'local-ocr' ? '本地 OCR 回退' : '样本规则识别'} · 置信度 {(recognizedBill.confidence * 100).toFixed(0)}%
                 </p>
+              )}
+              {parsedCard.detail?.includes('需核对') && (
+                <p className="text-[10px] text-amber-600">部分字段需要核对，保存前请检查金额、分类和数量单位。</p>
               )}
               {recognizedBill && !recognizedBill.rawText.trim() && (
                 <p className="text-[10px] text-amber-600">

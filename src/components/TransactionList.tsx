@@ -31,6 +31,15 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
         !keyword ||
         item.description.toLowerCase().includes(keyword) ||
         item.detail?.toLowerCase().includes(keyword) ||
+        item.subItems?.some(
+          subItem =>
+            subItem.description.toLowerCase().includes(keyword) ||
+            subItem.detail?.toLowerCase().includes(keyword) ||
+            subItem.quantity?.toLowerCase().includes(keyword) ||
+            subItem.category.toLowerCase().includes(keyword) ||
+            subItem.amount.toString().includes(keyword) ||
+            subItem.tag?.toLowerCase().includes(keyword),
+        ) ||
         item.category.toLowerCase().includes(keyword) ||
         item.paymentMethod?.toLowerCase().includes(keyword) ||
         item.amount.toString().includes(keyword) ||
@@ -217,6 +226,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                               <div className="flex items-center gap-1.5">
                                 <h4 className="text-xs font-semibold truncate leading-tight flex-1">{title}</h4>
                                 {item.tag && <span className="text-[9px] font-bold text-brand-purple bg-brand-purple/10 border border-brand-purple/20 px-1.5 py-0.5 rounded shrink-0">{item.tag}</span>}
+                                {item.recognition?.warnings?.length ? <span className="text-[9px] font-bold text-amber-600 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded shrink-0">需核对</span> : null}
                               </div>
                               <div className="flex items-center gap-1.5 text-[10px] text-dark-muted">
                                 <span className="bg-black/[0.03] px-1.5 py-0.5 rounded border border-black/[0.05] shrink-0">{item.category}</span>
@@ -235,9 +245,48 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                           </div>
                         </button>
 
-                        <div className={`overflow-hidden transition-all duration-300 ${expanded ? 'max-h-96 border-t border-black/[0.05] bg-black/[0.01]' : 'max-h-0'}`}>
+                        <div className={`overflow-hidden transition-all duration-300 ${expanded ? 'max-h-[36rem] border-t border-black/[0.05] bg-black/[0.01]' : 'max-h-0'}`}>
                           <div className="p-4 space-y-3.5">
                             <p className="text-xs leading-relaxed font-medium bg-dark-surface border border-black/[0.06] rounded-xl p-2.5 select-text">{item.detail || item.description}</p>
+                            {item.recognition && (
+                              <div className="rounded-xl border border-brand-purple/15 bg-brand-purple/8 p-2.5 space-y-1">
+                                <div className="text-[10px] font-bold text-brand-purple flex items-center justify-between">
+                                  <span>{item.recognition.source ?? '识别来源'}</span>
+                                  {item.recognition.itemCount ? <span>{item.recognition.itemCount} 项</span> : null}
+                                </div>
+                                {item.recognition.warnings?.length ? (
+                                  <p className="text-[10px] text-amber-700 leading-relaxed">{item.recognition.warnings.join('；')}</p>
+                                ) : (
+                                  <p className="text-[10px] text-dark-muted">基础金额校验通过，仍建议核对商品名称和分类。</p>
+                                )}
+                              </div>
+                            )}
+                            {item.subItems?.length ? (
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between text-[10px] text-dark-muted px-1">
+                                  <span>商品明细</span>
+                                  <span>{item.subItems.length} 项</span>
+                                </div>
+                                <div className="rounded-xl border border-black/[0.06] bg-dark-surface divide-y divide-black/[0.05] overflow-hidden">
+                                  {item.subItems.map((subItem, index) => (
+                                    <div key={`${subItem.description}-${index}`} className="p-2.5 flex items-start justify-between gap-3">
+                                      <div className="min-w-0 flex-1 space-y-1">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span className="text-sm shrink-0">{getCategoryEmoji(subItem.category)}</span>
+                                          <span className="text-xs font-semibold truncate">{subItem.description}</span>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-dark-muted">
+                                          <span className="bg-black/[0.03] border border-black/[0.05] rounded px-1.5 py-0.5">{subItem.category}</span>
+                                          {subItem.quantity && <span>{subItem.quantity}</span>}
+                                          {subItem.tag && <span>{subItem.tag}</span>}
+                                        </div>
+                                      </div>
+                                      <span className="text-xs font-bold font-mono shrink-0">¥{subItem.amount.toFixed(2)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
                             <div className="grid grid-cols-2 gap-2">
                               <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类" value={`${getCategoryEmoji(item.category)} ${item.category}`} />
                               {item.paymentMethod && <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={item.paymentMethod} />}

@@ -10,6 +10,17 @@ type DashboardView = 'overview' | 'category' | 'calendar';
 
 const PIE_COLORS = ['#4f46e5', '#0284c7', '#059669', '#d97706', '#e11d48', '#7c3aed', '#0f766e', '#64748b'];
 
+const categoryLedgerItems = (transactions: Transaction[]) =>
+  transactions.flatMap(item =>
+    item.subItems?.length
+      ? item.subItems.map(subItem => ({
+          amount: subItem.amount,
+          category: subItem.category,
+          tag: subItem.tag ?? item.tag,
+        }))
+      : [{ amount: item.amount, category: item.category, tag: item.tag }],
+  );
+
 export function Dashboard() {
   const [view, setView] = useState<DashboardView>('overview');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -35,14 +46,29 @@ export function Dashboard() {
   const maxWeek = Math.max(...weeklyData, 1);
 
   const categoryRows = useMemo(() => {
+    const ledgerItems = categoryLedgerItems(monthTransactions);
     return Object.entries(
-      monthTransactions.reduce<Record<string, number>>((acc, item) => {
+      ledgerItems.reduce<Record<string, number>>((acc, item) => {
         acc[item.category] = (acc[item.category] ?? 0) + item.amount;
         return acc;
       }, {}),
     )
       .map(([category, amount]) => ({ category, amount }))
       .sort((a, b) => b.amount - a.amount);
+  }, [monthTransactions]);
+
+  const tagRows = useMemo(() => {
+    const ledgerItems = categoryLedgerItems(monthTransactions);
+    return Object.entries(
+      ledgerItems.reduce<Record<string, number>>((acc, item) => {
+        if (!item.tag) return acc;
+        acc[item.tag] = (acc[item.tag] ?? 0) + item.amount;
+        return acc;
+      }, {}),
+    )
+      .map(([tag, amount]) => ({ amount, tag }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 8);
   }, [monthTransactions]);
 
   const dailyGroups = useMemo(() => {
@@ -113,7 +139,7 @@ export function Dashboard() {
         </>
       )}
 
-      {view === 'category' && <CategoryAnalysis categoryRows={categoryRows} monthTotal={monthTotal} />}
+      {view === 'category' && <CategoryAnalysis categoryRows={categoryRows} monthTotal={monthTotal} tagRows={tagRows} />}
 
       {view === 'calendar' && (
         <CalendarOverview
@@ -238,7 +264,15 @@ function toneClass(tone: 'info' | 'warn' | 'success') {
   return 'bg-brand-purple/8 border-brand-purple/20 text-brand-purple';
 }
 
-function CategoryAnalysis({ categoryRows, monthTotal }: { categoryRows: Array<{ category: string; amount: number }>; monthTotal: number }) {
+function CategoryAnalysis({
+  categoryRows,
+  monthTotal,
+  tagRows,
+}: {
+  categoryRows: Array<{ category: string; amount: number }>;
+  monthTotal: number;
+  tagRows: Array<{ amount: number; tag: string }>;
+}) {
   const topAmount = categoryRows[0]?.amount ?? 1;
   const pieGradient = buildPieGradient(categoryRows, monthTotal);
 
@@ -287,6 +321,21 @@ function CategoryAnalysis({ categoryRows, monthTotal }: { categoryRows: Array<{ 
               );
             })}
           </div>
+          {tagRows.length > 0 && (
+            <div className="space-y-2 pt-3 border-t border-black/[0.05]">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-dark-text/80">账目标签</span>
+                <span className="text-[10px] text-dark-muted">按商品/订单场景汇总</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {tagRows.map(row => (
+                  <span key={row.tag} className="text-[10px] rounded-full border border-brand-purple/15 bg-brand-purple/8 text-brand-purple px-2.5 py-1 font-semibold">
+                    {row.tag} · ¥{row.amount.toFixed(row.amount >= 100 ? 0 : 2)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </section>

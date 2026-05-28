@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle, Cpu, Globe, Key, Plus, RotateCcw, Save, Tag, Wallet, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Cpu, Globe, Key, Plus, RotateCcw, Save, Sparkles, Tag, Wallet, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { storage } from '../services/storage';
 import type { AppSettings } from '../types';
@@ -11,6 +11,8 @@ interface SettingsProps {
 export function Settings({ onSettingsSaved }: SettingsProps) {
   const [settings, setSettings] = useState<AppSettings>(() => storage.getSettings());
   const [newCategory, setNewCategory] = useState('');
+  const [testingModel, setTestingModel] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'warn' } | null>(null);
 
   const notify = (message: string, type: 'success' | 'warn' = 'success') => {
@@ -27,6 +29,62 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
     storage.saveSettings(settings);
     notify('设置已保存。');
     onSettingsSaved();
+  };
+
+  const testModel = async () => {
+    setTestingModel(true);
+    setTestResult(null);
+    const useDevProxy = import.meta.env.DEV;
+    const endpoint = useDevProxy ? '/__dev_mimo_chat' : `${settings.baseUrl.replace(/\/$/, '')}/v1/chat/completions`;
+    const transparentPixel =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+
+    try {
+      if (!useDevProxy && !settings.apiKey.trim()) throw new Error('请先填写 API Key');
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(useDevProxy ? {} : { Authorization: `Bearer ${settings.apiKey}` }),
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          temperature: 0.1,
+          max_completion_tokens: 1024,
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'system',
+              content: '你是模型能力测试助手。只返回 JSON：{"text":true,"json":true,"vision":true}。如果无法读取图片，vision 为 false。',
+            },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: '请确认你能返回 JSON，并判断图片是否可读。' },
+                { type: 'image_url', image_url: { url: transparentPixel } },
+              ],
+            },
+          ],
+        }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const message = payload?.choices?.[0]?.message;
+      const content = String(message?.content || message?.reasoning_content || '');
+      const cleaned = content.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleaned.slice(cleaned.indexOf('{'), cleaned.lastIndexOf('}') + 1)) as {
+        json?: boolean;
+        text?: boolean;
+        vision?: boolean;
+      };
+      setTestResult(`文字 ${parsed.text ? '可用' : '异常'} · JSON ${parsed.json ? '可用' : '异常'} · 图片 ${parsed.vision ? '可用' : '可能不支持'}`);
+      notify('模型能力测试完成');
+    } catch (error) {
+      setTestResult(error instanceof Error ? `测试失败：${error.message}` : '测试失败：接口返回异常');
+      notify('模型能力测试失败', 'warn');
+    } finally {
+      setTestingModel(false);
+    }
   };
 
   const addCategory = () => {
@@ -83,8 +141,11 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
 
       <form onSubmit={save} className="space-y-5">
         <Panel icon={<Key size={18} className="text-brand-purple" />} title="大模型服务">
+          <p className="text-[11px] text-dark-muted leading-relaxed bg-black/[0.02] border border-black/[0.06] rounded-xl px-3 py-2">
+            建议使用支持图片理解的视觉模型；如果配置为纯文本模型，截图拆单、商品数量和单位识别可能不完整。
+          </p>
           <Input
-            label="DeepSeek API Key"
+            label="API Key"
             type="password"
             placeholder="sk-..."
             value={settings.apiKey}
@@ -93,7 +154,7 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
           />
           <IconInput
             icon={<Globe size={14} className="text-dark-muted" />}
-            label="Base URL"
+            label="接口地址"
             value={settings.baseUrl}
             onChange={baseUrl => setSettings({ ...settings, baseUrl })}
           />
@@ -103,6 +164,16 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
             value={settings.model}
             onChange={model => setSettings({ ...settings, model })}
           />
+          <button
+            type="button"
+            onClick={testModel}
+            disabled={testingModel}
+            className="w-full py-2.5 rounded-xl bg-black/[0.02] border border-black/[0.08] text-xs font-bold text-brand-purple hover:bg-brand-purple/10 disabled:opacity-50 flex items-center justify-center gap-1.5"
+          >
+            <Sparkles size={14} />
+            {testingModel ? '正在测试模型能力' : '测试文字 / JSON / 图片能力'}
+          </button>
+          {testResult && <p className="text-[10px] text-dark-muted leading-relaxed bg-black/[0.02] border border-black/[0.06] rounded-xl px-3 py-2">{testResult}</p>}
         </Panel>
 
         <Panel icon={<Tag size={18} className="text-brand-purple" />} title="分类科目">

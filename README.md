@@ -1,25 +1,28 @@
-# 记账
+# 智能记账
 
-一个移动端优先的 AI 记账应用，基于 React、TypeScript、Vite、Tailwind CSS 和 Capacitor Android 构建。
+一款移动端优先的本地记账应用，支持文字记账、截图识别、订单拆分、预算看板和本地明细管理。项目基于 React、TypeScript、Vite、Tailwind CSS 与 Capacitor Android 构建。
 
-## 功能概览
+## 当前功能
 
-- **仪表盘**：查看月度预算、周度趋势、分类排行、饼状图和每日花费日历。
-- **智能洞察**：本地统计兜底；当数据足够且已配置 API Key 时，接入大模型生成月度对比、分类变化、预算建议和异常消费分析。
-- **AI 记账**：支持自然语言输入，未配置 API Key 时使用本地规则解析。
-- **截图拆单**：支持盒马鲜生、淘宝/天猫截图的来源识别和专用规则拆单，并允许手动切换来源重新解析。
-- **账单明细**：支持搜索、分类筛选、展开详情、单条删除和批量管理。
-- **高级设置**：配置 API Key、Base URL、模型名称、月度预算和自定义分类。
-- **Android 打包**：通过 Capacitor 生成 Android APK。
+- **AI 记账**：支持自然语言输入，提取金额、分类、日期、备注和标签；默认模型配置为小米 MiMo `mimo-v2.5`。
+- **截图识别**：支持接入视觉模型识别账单截图；未配置可用模型时保留本地规则和 Android OCR 回退能力。
+- **盒马订单**：识别盒马截图后保存为一条父账单，明细页可展开查看商品小项、金额、分类、数量和单位；分类统计会按子项摊分。
+- **淘宝/天猫订单**：识别订单截图后按订单或商品分别记录，优先使用实付款金额。
+- **账目标签**：自动提炼消费场景标签，例如 `#饮品补给`、`#家庭餐食`、`#日用补给`、`#衣物鞋履`、`#线上服务`。
+- **明细管理**：支持搜索、分类筛选、展开详情、单条删除、批量选择和批量删除。
+- **预算仪表盘**：展示月度支出、预算进度、周趋势、分类结构、标签汇总、日历视图和智能洞察。
+- **模型设置**：用户可自行配置 API Key、接口地址和模型名称；建议使用支持图片理解的视觉模型，文本模型可能无法完整支持截图拆单。
+- **模型能力测试**：设置页可测试文字、JSON 和图片能力，便于确认当前模型是否适合截图记账。
+- **本地数据**：账单、设置、预算和分类保存在本机 LocalStorage。
 
-## 技术栈
+## 数据兼容
 
-- React 19
-- TypeScript
-- Vite
-- Tailwind CSS
-- Capacitor Android
-- LocalStorage 本地持久化
+- 新用户首次安装后账单明细为空，不写入测试数据。
+- 老用户升级后保留已有真实账单、设置、API Key、预算和分类。
+- 旧版本内置测试账单会在升级时自动清理。
+- 本地存储 key 保持稳定：
+  - `ab_transactions`
+  - `ab_settings`
 
 ## 本地开发
 
@@ -28,74 +31,48 @@ npm install
 npm run dev
 ```
 
-默认本地地址：
+默认预览地址：
 
 ```text
 http://127.0.0.1:5173/
 ```
 
-## 构建 Web 资源
+开发预览可通过项目根目录的 `key.txt` 走本地代理测试视觉模型。`key.txt` 已被 `.gitignore` 忽略，不应提交到仓库。
+
+## 构建
 
 ```bash
 npm run build
 ```
 
-## 同步 Android 工程
+## Android
+
+同步 Android 工程：
 
 ```bash
 npm run android:sync
 ```
 
-## 构建 APK
-
-```bash
-cd android
-./gradlew assembleDebug
-```
-
-Windows PowerShell 可使用：
+构建 debug APK：
 
 ```powershell
 cd android
 .\gradlew.bat assembleDebug
 ```
 
-调试包输出路径：
+APK 输出路径：
 
 ```text
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-当前版本另存为：
+当前 Android 版本：
 
-```text
-jizhang-v1.3.1-debug.apk
-```
-
-## Android 更新兼容
-
-Android 是否识别为同一个 App 的更新，取决于：
-
-- 包名不变：`com.aurora.bookkeeper`
-- 签名证书不变
-- `versionCode` 递增
-
-当前版本：
-
-- `versionCode`: `9`
-- `versionName`: `1.3.1`
-
-## 本地数据兼容
-
-应用数据存储在 LocalStorage。重构和升级时应保持这些 key 稳定：
-
-- `ab_transactions`
-- `ab_settings`
-
-新安装用户默认账本为空；旧版本内置测试账单会在升级时自动清理，用户真实账单和设置继续保留。
+- `versionCode`: `11`
+- `versionName`: `1.4.0`
 
 ## 隐私说明
 
-- 账单数据默认保存在本机。
-- API Key 保存在本地设置中，不应写入源码或提交到仓库。
-- 截图测试文件和生成产物已通过 `.gitignore` 排除，避免误提交私人数据。
+- 账单数据默认仅保存在本机。
+- API Key 保存在用户本地设置中，开发用 `key.txt` 不进入 Git。
+- 截图识别会在用户配置并使用视觉模型时发送图片到对应模型服务，请根据所选模型服务的隐私政策自行判断。

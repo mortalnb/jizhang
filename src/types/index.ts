@@ -6,6 +6,12 @@ export interface Transaction {
   paymentMethod: string;
   description: string;
   detail?: string;
+  recognition?: {
+    itemCount?: number;
+    source?: string;
+    warnings?: string[];
+  };
+  subItems?: SplitItem[];
   tag?: string;
 }
 
@@ -22,6 +28,7 @@ export interface SplitItem {
   category: string;
   description: string;
   detail?: string;
+  quantity?: string;
   tag?: string;
 }
 

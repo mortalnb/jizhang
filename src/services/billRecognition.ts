@@ -1,10 +1,11 @@
 import { CapacitorPluginMlKitTextRecognition } from '@pantrist/capacitor-plugin-ml-kit-text-recognition';
-import type { ParsedTransaction, SplitItem } from '../types';
+import type { AppSettings, ParsedTransaction, SplitItem } from '../types';
 import { todayISO } from './date';
 
 export type BillSource = 'hema' | 'taobao' | 'generic';
 
 export interface RecognizedBill {
+  mode: 'fixture' | 'local-ocr' | 'vision';
   source: BillSource;
   sourceLabel: string;
   confidence: number;
@@ -20,6 +21,53 @@ interface BillFixture {
   minSize: number;
   maxSize: number;
   rawText: string;
+}
+
+interface OcrBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+interface OcrToken {
+  text: string;
+  bbox: OcrBox;
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+  lineIndex: number;
+}
+
+interface OcrLine {
+  bbox: OcrBox;
+  centerX: number;
+  centerY: number;
+  height: number;
+  index: number;
+  text: string;
+  tokens: OcrToken[];
+}
+
+interface OcrLayout {
+  height: number;
+  lines: OcrLine[];
+  text: string;
+  tokens: OcrToken[];
+  width: number;
+}
+
+interface CoordinateItem {
+  amount: number;
+  description: string;
+  quantity: string;
+}
+
+interface CoordinateParseResult {
+  detailNote?: string;
+  items: CoordinateItem[];
+  paidTotal?: number;
 }
 
 const BILL_FIXTURES: BillFixture[] = [
@@ -157,6 +205,11 @@ const categoryFor = (description: string, categories: string[]) => {
 };
 
 const normalizeAmount = (value: string) => Number(Number(value).toFixed(2));
+const amountFromText = (value: string) => {
+  const normalized = normalizeBillText(value).replace(/\s+/g, ' ');
+  const match = normalized.match(/[￥¥]\s*(\d+(?:\.\d{1,2})?)/) || normalized.match(/\b(\d{1,4}(?:\.\d{1,2})?)\b/);
+  return match ? normalizeAmount(match[1]) : undefined;
+};
 const normalizeBillText = (rawText: string) =>
   rawText
     .replace(/[¥￥]\s*/g, ' ￥')
@@ -169,6 +222,37 @@ const normalizeBillText = (rawText: string) =>
 const hasNativeOcrRuntime = () =>
   typeof window !== 'undefined' &&
   Boolean((window as typeof window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
+
+const preprocessImageForOcr = async (file: File) => {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('图片读取失败'));
+    reader.readAsDataURL(file);
+  });
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('图片读取失败'));
+    img.src = dataUrl;
+  });
+
+  const sourceTop = Math.round(image.height * 0.07);
+  const sourceBottom = Math.round(image.height * 0.985);
+  const sourceHeight = Math.max(sourceBottom - sourceTop, 1);
+  const targetWidth = image.width < 1200 ? Math.round(image.width * 1.5) : image.width;
+  const scale = targetWidth / image.width;
+  const canvas = document.createElement('canvas');
+  canvas.width = targetWidth;
+  canvas.height = Math.round(sourceHeight * scale);
+  const context = canvas.getContext('2d');
+  if (!context) return dataUrl.split(',')[1] ?? dataUrl;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.filter = 'contrast(1.12) brightness(1.03)';
+  context.drawImage(image, 0, sourceTop, image.width, sourceHeight, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.92).split(',')[1] ?? dataUrl.split(',')[1] ?? dataUrl;
+};
 
 const itemTitle = (description: string, quantity: string) => {
   const clean = description.replace(/\s+/g, ' ').trim();
@@ -206,6 +290,110 @@ const isLikelyDescription = (line: string) => {
 
 const quantityFrom = (value: string) =>
   value.match(/(\d+(?:\.\d+)?)\s*(盒|袋|杯|瓶|份|件|只|枚|包|罐|台|个|张|次)/)?.[0];
+
+const mergeBoxes = (boxes: OcrBox[]): OcrBox => ({
+  left: Math.min(...boxes.map(box => box.left)),
+  top: Math.min(...boxes.map(box => box.top)),
+  right: Math.max(...boxes.map(box => box.right)),
+  bottom: Math.max(...boxes.map(box => box.bottom)),
+});
+
+const textFromLineTokens = (tokens: OcrToken[]) =>
+  tokens
+    .sort((a, b) => a.bbox.left - b.bbox.left)
+    .map(token => token.text)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const flattenOcrTokens = (blocks: Array<{ lines?: Array<{ boundingBox?: OcrBox; elements?: Array<{ boundingBox?: OcrBox; text?: string }>; text?: string }> }>): OcrToken[] => {
+  const tokens: OcrToken[] = [];
+  blocks.forEach(block => {
+    block.lines?.forEach(line => {
+      const elements = line.elements?.filter(element => element.text?.trim() && element.boundingBox) ?? [];
+      if (elements.length > 0) {
+        elements.forEach(element => {
+          const bbox = element.boundingBox as OcrBox;
+          tokens.push({
+            text: element.text?.trim() ?? '',
+            bbox,
+            centerX: (bbox.left + bbox.right) / 2,
+            centerY: (bbox.top + bbox.bottom) / 2,
+            width: bbox.right - bbox.left,
+            height: bbox.bottom - bbox.top,
+            lineIndex: -1,
+          });
+        });
+      } else if (line.text?.trim() && line.boundingBox) {
+        const bbox = line.boundingBox;
+        tokens.push({
+          text: line.text.trim(),
+          bbox,
+          centerX: (bbox.left + bbox.right) / 2,
+          centerY: (bbox.top + bbox.bottom) / 2,
+          width: bbox.right - bbox.left,
+          height: bbox.bottom - bbox.top,
+          lineIndex: -1,
+        });
+      }
+    });
+  });
+  return tokens.filter(token => token.width > 0 && token.height > 0);
+};
+
+const buildOcrLayout = (blocks: Array<{ lines?: Array<{ boundingBox?: OcrBox; elements?: Array<{ boundingBox?: OcrBox; text?: string }>; text?: string }> }>, fallbackText: string): OcrLayout | undefined => {
+  const tokens = flattenOcrTokens(blocks);
+  if (tokens.length === 0) return undefined;
+  const medianHeight = [...tokens].sort((a, b) => a.height - b.height)[Math.floor(tokens.length / 2)]?.height ?? 24;
+  const tolerance = Math.max(medianHeight * 0.65, 10);
+  const clusters: OcrToken[][] = [];
+
+  for (const token of [...tokens].sort((a, b) => a.centerY - b.centerY || a.bbox.left - b.bbox.left)) {
+    const cluster = clusters.find(row => Math.abs(row.reduce((sum, item) => sum + item.centerY, 0) / row.length - token.centerY) <= tolerance);
+    if (cluster) cluster.push(token);
+    else clusters.push([token]);
+  }
+
+  const lines = clusters
+    .map((cluster, index) => {
+      const sorted = cluster.sort((a, b) => a.bbox.left - b.bbox.left);
+      sorted.forEach(token => {
+        token.lineIndex = index;
+      });
+      const bbox = mergeBoxes(sorted.map(token => token.bbox));
+      return {
+        bbox,
+        centerX: (bbox.left + bbox.right) / 2,
+        centerY: (bbox.top + bbox.bottom) / 2,
+        height: bbox.bottom - bbox.top,
+        index,
+        text: textFromLineTokens(sorted),
+        tokens: sorted,
+      };
+    })
+    .sort((a, b) => a.centerY - b.centerY);
+
+  lines.forEach((line, index) => {
+    line.index = index;
+    line.tokens.forEach(token => {
+      token.lineIndex = index;
+    });
+  });
+
+  const bbox = mergeBoxes(tokens.map(token => token.bbox));
+  return {
+    height: bbox.bottom - Math.min(0, bbox.top),
+    lines,
+    text: fallbackText,
+    tokens,
+    width: bbox.right - Math.min(0, bbox.left),
+  };
+};
+
+const xRatio = (value: number, layout: OcrLayout) => value / Math.max(layout.width, 1);
+const yRatio = (value: number, layout: OcrLayout) => value / Math.max(layout.height, 1);
+
+const lineHasNoise = (line: OcrLine, extraNoise?: RegExp) => isNoiseLine(line.text) || Boolean(extraNoise?.test(line.text));
 
 const parseItemLine = (line: string) => {
   const normalized = line.replace(/\s+/g, ' ').trim();
@@ -254,6 +442,167 @@ const parseOcrItemBlocks = (rawText: string) => {
   return items;
 };
 
+const lineTextInXRange = (line: OcrLine, layout: OcrLayout, min: number, max: number) =>
+  cleanDescription(
+    line.tokens
+      .filter(token => {
+        const ratio = xRatio(token.centerX, layout);
+        return ratio >= min && ratio <= max && !/[￥¥]\s*\d/.test(token.text);
+      })
+      .map(token => token.text)
+      .join(' '),
+  );
+
+const uniqueCoordinateItems = (items: CoordinateItem[]) => {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = `${item.description}|${item.amount.toFixed(2)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return item.description.length > 1 && item.amount > 0;
+  });
+};
+
+const extractPagePaidTotal = (layout: OcrLayout) => {
+  const totalLine = [...layout.lines]
+    .reverse()
+    .find(line => /(实付|合计|总计|应付|付款|支付)/.test(line.text) && /[￥¥]?\s*\d+(?:\.\d{1,2})?/.test(line.text));
+  return totalLine ? amountFromText(totalLine.text) : undefined;
+};
+
+const coordinateDetailNote = (sourceLabel: string, itemCount: number, total: number, paidTotal?: number) => {
+  if (paidTotal && Math.abs(paidTotal - total) > 0.05) {
+    return `${sourceLabel}坐标解析识别 ${itemCount} 个项目，明细合计 ¥${total.toFixed(2)}，页面实付/合计约 ¥${paidTotal.toFixed(2)}，金额需核对。`;
+  }
+  return `${sourceLabel}坐标解析识别 ${itemCount} 个项目，总金额 ¥${total.toFixed(2)}。`;
+};
+
+const parseHemaByCoordinates = (layout: OcrLayout): CoordinateParseResult => {
+  const items: CoordinateItem[] = [];
+  const priceLines = layout.lines.filter(line => {
+    const rightSide = xRatio(line.bbox.right, layout);
+    return yRatio(line.centerY, layout) >= 0.04 && rightSide >= 0.76 && rightSide <= 0.99 && Boolean(amountFromText(line.text)) && !lineHasNoise(line);
+  });
+
+  for (const priceLine of priceLines) {
+    const amount = amountFromText(priceLine.text);
+    if (!amount) continue;
+
+    const nearbyTitleLines = layout.lines
+      .filter(line => line.index <= priceLine.index && line.index >= priceLine.index - 3)
+      .filter(line => !lineHasNoise(line, /规格|单价|申请退款|加购物车|支持7天|化必赔|上市日期|生产日期/));
+
+    const sameLineTitle = lineTextInXRange(priceLine, layout, 0.26, 0.78);
+    const fallbackTitle = [...nearbyTitleLines]
+      .reverse()
+      .map(line => lineTextInXRange(line, layout, 0.26, 0.78) || cleanDescription(line.text))
+      .find(isLikelyDescription);
+    const description = sameLineTitle && isLikelyDescription(sameLineTitle) ? sameLineTitle : fallbackTitle;
+    if (!description) continue;
+
+    const quantity =
+      layout.lines
+        .filter(line => line.index >= priceLine.index && line.index <= priceLine.index + 2)
+        .flatMap(line => line.tokens)
+        .filter(token => xRatio(token.centerX, layout) >= 0.82)
+        .map(token => quantityFrom(token.text))
+        .find(Boolean) ?? '1件';
+
+    items.push({ amount, description, quantity });
+  }
+
+  const uniqueItems = uniqueCoordinateItems(items);
+  const total = normalizeAmount(String(uniqueItems.reduce((sum, item) => sum + item.amount, 0)));
+  const paidTotal = extractPagePaidTotal(layout);
+  return {
+    detailNote: uniqueItems.length >= 2 ? coordinateDetailNote('盒马鲜生', uniqueItems.length, total, paidTotal) : undefined,
+    items: uniqueItems,
+    paidTotal,
+  };
+};
+
+const isTaobaoNoiseLine = (line: OcrLine) =>
+  lineHasNoise(line, /全部订单|购物|闪购|飞猪|筛选|管理|AI助手|待付款|待发货|待收货|退款|售后|确认收货|查看物流|催促|更多|已签收|运输中|预计|评价|搜索订单/);
+
+const parseTaobaoByCoordinates = (layout: OcrLayout): CoordinateParseResult => {
+  const items: CoordinateItem[] = [];
+  const paidLines = layout.lines.filter(line => yRatio(line.centerY, layout) >= 0.18 && /实付款/.test(line.text) && Boolean(amountFromText(line.text)));
+
+  for (const paidLine of paidLines) {
+    const amount = amountFromText(paidLine.text);
+    if (!amount) continue;
+
+    const title = [...layout.lines]
+      .filter(line => line.index < paidLine.index && line.index >= paidLine.index - 8)
+      .reverse()
+      .filter(line => !isTaobaoNoiseLine(line))
+      .map(line => lineTextInXRange(line, layout, 0.28, 0.82) || cleanDescription(line.text))
+      .find(isLikelyDescription);
+    if (!title) continue;
+    const quantity =
+      layout.lines
+        .filter(line => line.index < paidLine.index && line.index >= paidLine.index - 5)
+        .flatMap(line => line.tokens)
+        .filter(token => xRatio(token.centerX, layout) >= 0.86)
+        .map(token => token.text.match(/[x×]\s*(\d+)/i)?.[0])
+        .find(Boolean) ?? '1件';
+    items.push({ amount, description: title, quantity });
+  }
+
+  if (items.length === 0) {
+    for (const priceLine of layout.lines.filter(line => yRatio(line.centerY, layout) >= 0.18 && xRatio(line.bbox.right, layout) >= 0.82 && Boolean(amountFromText(line.text)))) {
+      if (isTaobaoNoiseLine(priceLine)) continue;
+      const amount = amountFromText(priceLine.text);
+      const description = lineTextInXRange(priceLine, layout, 0.28, 0.82);
+      if (!amount || !isLikelyDescription(description)) continue;
+      items.push({ amount, description, quantity: '1件' });
+    }
+  }
+
+  const uniqueItems = uniqueCoordinateItems(items);
+  const total = normalizeAmount(String(uniqueItems.reduce((sum, item) => sum + item.amount, 0)));
+  const paidTotal = extractPagePaidTotal(layout);
+  return {
+    detailNote: uniqueItems.length >= 2 ? coordinateDetailNote('淘宝/天猫', uniqueItems.length, total, paidTotal) : undefined,
+    items: uniqueItems,
+    paidTotal,
+  };
+};
+
+const coordinateItemsToParsed = (
+  coordinate: CoordinateParseResult,
+  categories: string[],
+  source: BillSource,
+  sourceLabel: string,
+): ParsedTransaction | undefined => {
+  if (coordinate.items.length < 2) return undefined;
+  const splitItems = coordinate.items.map(item => ({
+    amount: item.amount,
+    category: categoryFor(item.description, categories),
+    description: itemTitle(item.description, item.quantity),
+    detail: `${sourceLabel}坐标解析：${item.description}，数量 ${item.quantity}，金额 ¥${item.amount.toFixed(2)}。`,
+    quantity: source === 'hema' ? item.quantity : undefined,
+    tag: source === 'taobao' ? '#淘宝网购' : '#盒马周购',
+  }));
+  const total = normalizeAmount(String(splitItems.reduce((sum, item) => sum + item.amount, 0)));
+  return {
+    amount: total,
+    category: source === 'taobao' ? knownCategory(categories, '其他') : knownCategory(categories, '餐费'),
+    paymentMethod: source === 'generic' ? '' : '支付宝',
+    description: source === 'taobao' ? '淘宝天猫订单拆单' : '盒马鲜生周购拆单',
+    detail: coordinate.detailNote ?? coordinateDetailNote(sourceLabel, splitItems.length, total, coordinate.paidTotal),
+    date: todayISO(),
+    tag: source === 'taobao' ? '#淘宝网购' : '#盒马周购',
+    splitItems,
+  };
+};
+
+const parseBillCoordinates = (layout: OcrLayout, source: BillSource, categories: string[]) => {
+  if (source === 'hema') return coordinateItemsToParsed(parseHemaByCoordinates(layout), categories, source, '盒马鲜生');
+  if (source === 'taobao') return coordinateItemsToParsed(parseTaobaoByCoordinates(layout), categories, source, '淘宝/天猫');
+  return undefined;
+};
+
 const parseHema = (rawText: string, categories: string[]): ParsedTransaction => {
   const itemPattern = /^(.+?)\s+[￥¥](\d+(?:\.\d{1,2})?)\s+(\d+[^\s]*)$/gm;
   const splitItems: SplitItem[] = [];
@@ -267,6 +616,7 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
       category: categoryFor(description, categories),
       description: title,
       detail: billDetail('盒马鲜生', description, amount, quantity),
+      quantity,
       tag: '#盒马周购',
     });
   }
@@ -278,6 +628,7 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
         category: categoryFor(item.description, categories),
         description: itemTitle(item.description, item.quantity),
         detail: billDetail('盒马鲜生', item.description, item.amount, item.quantity),
+        quantity: item.quantity,
         tag: '#盒马周购',
       });
     }
@@ -373,28 +724,237 @@ export const parseBillText = (rawText: string, source: BillSource, categories: s
   return parseGeneric(rawText, categories);
 };
 
-export const recognizeBillImage = async (file: File, categories: string[]): Promise<RecognizedBill> => {
+interface MimoVisionSplitItem {
+  amount?: number | string;
+  category?: string;
+  description?: string;
+  detail?: string;
+  quantity?: string;
+  tag?: string;
+}
+
+interface MimoVisionResult {
+  amount?: number | string;
+  category?: string;
+  date?: string;
+  description?: string;
+  detail?: string;
+  paymentMethod?: string;
+  source?: BillSource | string;
+  sourceLabel?: string;
+  splitItems?: MimoVisionSplitItem[];
+  tag?: string;
+}
+
+const imageToDataUrlForVision = async (file: File) => {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Image read failed'));
+    reader.readAsDataURL(file);
+  });
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Image decode failed'));
+    img.src = dataUrl;
+  });
+
+  const maxWidth = 1440;
+  const scale = image.width > maxWidth ? maxWidth / image.width : 1;
+  if (scale >= 1 && file.size < 3_800_000) return dataUrl;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const context = canvas.getContext('2d');
+  if (!context) return dataUrl;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.9);
+};
+
+const extractJsonObject = (value: string) => {
+  const cleaned = value.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start < 0 || end < start) throw new Error('Vision response is not JSON');
+  return cleaned.slice(start, end + 1);
+};
+
+const normalizeRemoteCategory = (category: string | undefined, text: string, categories: string[]) => {
+  if (category && categories.includes(category)) return category;
+  return categoryFor(text, categories);
+};
+
+const sourceFromVision = (parsed: MimoVisionResult): BillSource => {
+  const value = `${parsed.source ?? ''} ${parsed.sourceLabel ?? ''} ${parsed.description ?? ''}`.toLowerCase();
+  if (/hema|盒马|盒馬/.test(value)) return 'hema';
+  if (/taobao|tmall|淘宝|淘寶|天猫|天貓/.test(value)) return 'taobao';
+  return 'generic';
+};
+
+const inferBillTag = (text: string, source: BillSource) => {
+  if (/牛奶|酸奶|乳|豆浆|咖啡|茶|饮料|汽水|啤酒|酒|水杯|冰杯|矿泉水|果汁/i.test(text)) return '#饮品补给';
+  if (/鸡蛋|蛋|虾|鱼|牛肉|猪肉|鸡肉|肉|水饺|馒头|面包|米饭|熟食|冰淇淋|零食|水果|番茄|金果|葡萄|蒜/i.test(text)) return '#家庭餐食';
+  if (/洗发|沐浴|清洁|纸巾|牙膏|牙刷|湿巾|洗衣/i.test(text)) return '#日用补给';
+  if (/拖鞋|鞋|衣|裤|袜|帽|服饰/i.test(text)) return '#衣物鞋履';
+  if (/检测|查重|服务|会员|Turnitin/i.test(text)) return '#线上服务';
+  if (source === 'hema') return '#盒马采购';
+  if (source === 'taobao') return '#网购订单';
+  return undefined;
+};
+
+const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], source: BillSource): ParsedTransaction => {
+  const warnings: string[] = [];
+  const splitItems = parsed.splitItems
+    ?.map(item => {
+      const amount = Number(item.amount) || 0;
+      const sourceText = `${item.description ?? ''} ${item.detail ?? ''} ${item.category ?? ''}`;
+      const category = normalizeRemoteCategory(item.category, sourceText, categories);
+      const quantity = source === 'hema' ? item.quantity?.replace(/\s+/g, ' ').trim() : undefined;
+      const tag = item.tag ?? inferBillTag(sourceText, source) ?? parsed.tag;
+      if (source === 'hema' && !quantity) warnings.push(`${item.description ?? category} 缺少数量单位`);
+      return {
+        amount: Number(amount.toFixed(2)),
+        category,
+        description: (item.description || `${category}支出`).replace(/\s+/g, ' ').trim().slice(0, 32),
+        detail: item.detail || `${item.description ?? category}${quantity ? `，数量${quantity}` : '，数量需核对'}，金额¥${amount.toFixed(2)}。`,
+        quantity,
+        tag,
+      } satisfies SplitItem;
+    })
+    .filter(item => item.amount > 0 && item.description);
+
+  const amount = splitItems?.length
+    ? Number(splitItems.reduce((sum, item) => sum + item.amount, 0).toFixed(2))
+    : Number(Number(parsed.amount) || 0);
+  const parsedAmount = Number(parsed.amount) || 0;
+  if (source !== 'hema' && splitItems?.length && parsedAmount > 0 && Math.abs(parsedAmount - amount) > 0.05) {
+    warnings.push(`模型总额 ¥${parsedAmount.toFixed(2)} 与拆单合计 ¥${amount.toFixed(2)} 不一致`);
+  }
+  const categoryText = `${parsed.category ?? ''} ${parsed.description ?? ''} ${parsed.detail ?? ''}`;
+  const category = source === 'hema' ? knownCategory(categories, '餐费') : normalizeRemoteCategory(parsed.category, categoryText, categories);
+  const description =
+    (source === 'hema' ? '盒马鲜生订单' : parsed.description?.replace(/\s+/g, ' ').trim().slice(0, 24)) ||
+    (source === 'taobao' ? '淘宝天猫订单' : '截图账单识别');
+
+  return {
+    amount: Number(amount.toFixed(2)),
+    category,
+    paymentMethod: parsed.paymentMethod?.trim() ?? '',
+    description,
+    detail:
+      `${parsed.detail || `MiMo 多模态识别截图，${splitItems?.length ? `共拆出 ${splitItems.length} 个项目` : `识别金额 ¥${amount.toFixed(2)}`}。`}${
+        warnings.length ? ` 需核对：${warnings.join('；')}。` : ' 已通过基础金额校验。'
+      }`,
+    date: parsed.date || todayISO(),
+    tag: parsed.tag ?? inferBillTag(`${description} ${parsed.detail ?? ''}`, source),
+    splitItems: splitItems && splitItems.length > 1 ? splitItems : undefined,
+  };
+};
+
+const recognizeWithMimoVision = async (file: File, categories: string[], settings?: Pick<AppSettings, 'apiKey' | 'baseUrl' | 'model'>) => {
+  const apiKey = settings?.apiKey?.trim();
+  const useDevProxy = import.meta.env.DEV;
+  if (!apiKey && !useDevProxy) return undefined;
+
+  const configuredBaseUrl = settings?.baseUrl?.trim() || '';
+  const configuredModel = settings?.model?.trim() || '';
+  const baseUrl = (/xiaomimimo\.com/i.test(configuredBaseUrl) ? configuredBaseUrl : 'https://api.xiaomimimo.com').replace(/\/$/, '');
+  const model = /^mimo/i.test(configuredModel) ? configuredModel : 'mimo-v2.5';
+  const imageUrl = await imageToDataUrlForVision(file);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 90_000);
+
+  try {
+    const response = await fetch(useDevProxy ? '/__dev_mimo_chat' : `${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(useDevProxy ? {} : { Authorization: `Bearer ${apiKey}` }),
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.1,
+        top_p: 0.9,
+        max_completion_tokens: 4096,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content:
+              `你是记账截图识别助手。请从截图中提取账单 JSON，只返回 JSON。` +
+              `字段：amount, category, paymentMethod, description, detail, date, tag, source, sourceLabel, splitItems。` +
+              `splitItems 每项字段：amount, category, description, detail, quantity, tag。` +
+              `category 必须属于：${categories.join(', ')}。` +
+              `description 是账单列表显示的凝练标题；detail 是稍微详细的识别依据。` +
+              `盒马/超市长截图必须逐商品拆单，商品金额取右侧成交价，quantity 必须包含具体数量和单位，例如“3杯”“1袋”“950ml 1盒”。` +
+              `淘宝/天猫优先取每个订单的实付款，分别作为 splitItems 记录即可，不需要识别 quantity。` +
+              `饮料、咖啡、牛奶、酒水归“饮料”；饭菜、生鲜、水果、零食、冰淇淋、熟食归“餐费”；清洁洗护归“日用”；鞋服归“服饰”。` +
+              `tag 请提炼简短账目标签，例如 #饮品补给、#家庭餐食、#日用补给、#衣物鞋履、#线上服务、#盒马采购、#网购订单。` +
+              `支付方式看不到时返回空字符串。今天是 ${todayISO()}。`,
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: '识别这张记账截图，返回可直接保存的 JSON。' },
+              { type: 'image_url', image_url: { url: imageUrl } },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) throw new Error(`MiMo vision HTTP ${response.status}`);
+    const payload = await response.json();
+    const content = payload?.choices?.[0]?.message?.content || payload?.choices?.[0]?.message?.reasoning_content;
+    if (!content) throw new Error('MiMo vision returned empty content');
+    const parsed = JSON.parse(extractJsonObject(String(content))) as MimoVisionResult;
+    const source = sourceFromVision(parsed);
+    return {
+      mode: 'vision',
+      source,
+      sourceLabel: parsed.sourceLabel || SOURCE_LABELS[source],
+      confidence: 0.93,
+      rawText: JSON.stringify(parsed, null, 2),
+      result: normalizeVisionResult(parsed, categories, source),
+    } satisfies RecognizedBill;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+};
+
+export const recognizeBillImage = async (file: File, categories: string[], settings?: Pick<AppSettings, 'apiKey' | 'baseUrl' | 'model'>): Promise<RecognizedBill> => {
   const fixture = await guessFixture(file);
+
+  try {
+    const visionResult = await recognizeWithMimoVision(file, categories, settings);
+    if (visionResult) return visionResult;
+  } catch (error) {
+    console.warn('MiMo vision recognition failed, falling back to local OCR.', error);
+  }
 
   if (hasNativeOcrRuntime()) {
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error('图片读取失败'));
-        reader.readAsDataURL(file);
-      });
-      const base64Image = dataUrl.split(',')[1] ?? dataUrl;
+      const base64Image = await preprocessImageForOcr(file);
       const response = await CapacitorPluginMlKitTextRecognition.detectText({ base64Image, rotation: 0 });
       const rawText = String(response.text ?? '');
       if (rawText.trim()) {
-        const detected = detectSource(rawText);
+        const detectedByText = detectSource(rawText);
+        const detected = detectedByText.source === 'generic' && fixture ? { source: fixture.source, confidence: 0.88 } : detectedByText;
+        const layout = buildOcrLayout(response.blocks ?? [], rawText);
+        const coordinateResult = layout ? parseBillCoordinates(layout, detected.source, categories) : undefined;
         return {
+          mode: 'local-ocr',
           source: detected.source,
           sourceLabel: SOURCE_LABELS[detected.source],
           confidence: detected.confidence,
           rawText,
-          result: parseBillText(rawText, detected.source, categories),
+          result: coordinateResult ?? parseBillText(rawText, detected.source, categories),
         };
       }
     } catch (error) {
@@ -407,6 +967,7 @@ export const recognizeBillImage = async (file: File, categories: string[]): Prom
   const rawText = fixture?.rawText ?? '';
   const detected = fixture ? { source: fixture.source, confidence: 0.99 } : detectSource(rawText);
   return {
+    mode: fixture ? 'fixture' : 'local-ocr',
     source: detected.source,
     sourceLabel: SOURCE_LABELS[detected.source],
     confidence: detected.confidence,

@@ -48,6 +48,14 @@ const compactDescription = (value: string | undefined, category: string) => {
   return firstClause.length > 18 ? `${firstClause.slice(0, 18)}...` : firstClause;
 };
 
+const extractJsonObject = (value: string) => {
+  const cleaned = value.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start < 0 || end < start) throw new Error('AI response is not JSON');
+  return cleaned.slice(start, end + 1);
+};
+
 const parseSplitItems = (text: string, categories: string[], tag?: string): SplitItem[] => {
   const normalized = text.replace(/[，；;]/g, ',');
   const parts = normalized.split(',').map(part => part.trim()).filter(Boolean);
@@ -134,21 +142,23 @@ const normalizeRemoteResult = (parsed: Partial<ParsedTransaction>, text: string,
 export const aiParser = {
   async parse(text: string, settings: AppSettings): Promise<ParsedTransaction> {
     const categories = settings.categories.length ? settings.categories : ['其他'];
-    if (!settings.apiKey.trim()) {
+    const useDevProxy = import.meta.env.DEV;
+    if (!settings.apiKey.trim() && !useDevProxy) {
       await new Promise(resolve => setTimeout(resolve, 450));
       return localParse(text, categories);
     }
 
     try {
-      const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
+      const response = await fetch(useDevProxy ? '/__dev_mimo_chat' : `${settings.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${settings.apiKey}`,
+          ...(useDevProxy ? {} : { Authorization: `Bearer ${settings.apiKey}` }),
         },
         body: JSON.stringify({
           model: settings.model,
           temperature: 0.1,
+          max_completion_tokens: 2048,
           response_format: { type: 'json_object' },
           messages: [
             {
@@ -162,8 +172,8 @@ export const aiParser = {
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
-      const content = payload?.choices?.[0]?.message?.content;
-      return normalizeRemoteResult(JSON.parse(content), text, categories);
+      const content = payload?.choices?.[0]?.message?.content || payload?.choices?.[0]?.message?.reasoning_content;
+      return normalizeRemoteResult(JSON.parse(extractJsonObject(String(content))), text, categories);
     } catch (error) {
       console.warn('AI parse failed, falling back to local parser.', error);
       return localParse(text, categories);

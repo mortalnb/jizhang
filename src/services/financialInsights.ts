@@ -23,8 +23,30 @@ interface MonthSummary {
 
 const currency = (amount: number) => `¥${amount.toFixed(amount >= 100 ? 0 : 2)}`;
 
+const ledgerItemsForStats = (transactions: Transaction[]) =>
+  transactions.flatMap(item =>
+    item.subItems?.length
+      ? item.subItems.map(subItem => ({
+          amount: subItem.amount,
+          category: subItem.category,
+          date: item.date,
+          description: subItem.description,
+          tag: subItem.tag ?? item.tag,
+        }))
+      : [
+          {
+            amount: item.amount,
+            category: item.category,
+            date: item.date,
+            description: item.description,
+            tag: item.tag,
+          },
+        ],
+  );
+
 const summarizeByMonth = (transactions: Transaction[]): MonthSummary[] => {
-  const groups = transactions.reduce<Record<string, Transaction[]>>((acc, item) => {
+  const ledgerItems = ledgerItemsForStats(transactions);
+  const groups = ledgerItems.reduce<Record<string, typeof ledgerItems>>((acc, item) => {
     acc[monthKey(item.date)] ??= [];
     acc[monthKey(item.date)].push(item);
     return acc;
@@ -80,8 +102,9 @@ const allCategoryDeltas = (current?: MonthSummary, previous?: MonthSummary) => {
 };
 
 const tagTotals = (transactions: Transaction[]) => {
+  const ledgerItems = ledgerItemsForStats(transactions);
   return Object.entries(
-    transactions.reduce<Record<string, { amount: number; count: number }>>((acc, item) => {
+    ledgerItems.reduce<Record<string, { amount: number; count: number }>>((acc, item) => {
       if (!item.tag) return acc;
       acc[item.tag] ??= { amount: 0, count: 0 };
       acc[item.tag].amount += item.amount;
@@ -169,7 +192,8 @@ export const buildLocalInsights = (transactions: Transaction[], budget: number):
 };
 
 const parseModelInsights = (content: string): FinancialInsight[] => {
-  const parsed = JSON.parse(content) as { insights?: FinancialInsight[] };
+  const cleaned = content.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  const parsed = JSON.parse(cleaned.slice(cleaned.indexOf('{'), cleaned.lastIndexOf('}') + 1)) as { insights?: FinancialInsight[] };
   return (parsed.insights ?? [])
     .filter(item => item.title && item.body)
     .map(item => {
@@ -188,7 +212,8 @@ export const generateFinancialInsights = async (
   settings: AppSettings,
 ): Promise<InsightResult> => {
   const local = buildLocalInsights(transactions, settings.monthlyBudget);
-  if (!settings.apiKey.trim() || !local.enoughDataForModel) return local;
+  const useDevProxy = import.meta.env.DEV;
+  if ((!settings.apiKey.trim() && !useDevProxy) || !local.enoughDataForModel) return local;
 
   const summaries = summarizeByMonth(transactions).slice(-4);
   const currentMonth = todayISO().slice(0, 7);
@@ -225,15 +250,16 @@ export const generateFinancialInsights = async (
     }));
 
   try {
-    const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
+    const response = await fetch(useDevProxy ? '/__dev_mimo_chat' : `${settings.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${settings.apiKey}`,
+        ...(useDevProxy ? {} : { Authorization: `Bearer ${settings.apiKey}` }),
       },
       body: JSON.stringify({
         model: settings.model,
         temperature: 0.4,
+        max_completion_tokens: 2048,
         response_format: { type: 'json_object' },
         messages: [
           {
@@ -263,7 +289,8 @@ export const generateFinancialInsights = async (
 
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
-    const insights = parseModelInsights(payload?.choices?.[0]?.message?.content ?? '');
+    const content = payload?.choices?.[0]?.message?.content || payload?.choices?.[0]?.message?.reasoning_content || '';
+    const insights = parseModelInsights(content);
     return insights.length ? { source: 'model', enoughDataForModel: true, insights } : local;
   } catch (error) {
     console.warn('Financial insight generation failed, using local insights.', error);

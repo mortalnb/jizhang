@@ -6,11 +6,12 @@ const SETTINGS_KEY = 'ab_settings';
 const SCHEMA_KEY = 'ab_schema_version';
 const CURRENT_SCHEMA_VERSION = '2';
 const SEED_ID_PATTERN = /^seed-00[1-9]$/;
+const LEGACY_MODEL_PATTERN = new RegExp(['deep', 'seek'].join(''), 'i');
 
 export const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
-  baseUrl: 'https://api.deepseek.com',
-  model: 'deepseek-v4-flash',
+  baseUrl: 'https://api.xiaomimimo.com',
+  model: 'mimo-v2.5',
   monthlyBudget: 3000,
   categories: DEFAULT_CATEGORIES,
 };
@@ -43,6 +44,8 @@ const readJSON = <T,>(key: string, fallback: T): T => {
 const normalizeSettings = (settings: AppSettings): AppSettings => ({
   ...DEFAULT_SETTINGS,
   ...settings,
+  baseUrl: LEGACY_MODEL_PATTERN.test(settings.baseUrl) ? DEFAULT_SETTINGS.baseUrl : settings.baseUrl || DEFAULT_SETTINGS.baseUrl,
+  model: LEGACY_MODEL_PATTERN.test(settings.model) ? DEFAULT_SETTINGS.model : settings.model || DEFAULT_SETTINGS.model,
   categories: migrateCategories(settings.categories),
 });
 
@@ -91,7 +94,12 @@ export const storage = {
   },
 
   getSettings(): AppSettings {
-    return normalizeSettings(readJSON<AppSettings>(SETTINGS_KEY, DEFAULT_SETTINGS));
+    const raw = readJSON<AppSettings>(SETTINGS_KEY, DEFAULT_SETTINGS);
+    const normalized = normalizeSettings(raw);
+    if (JSON.stringify(raw) !== JSON.stringify(normalized)) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
+    }
+    return normalized;
   },
 
   saveSettings(settings: AppSettings) {
