@@ -194,11 +194,14 @@ const categoryFor = (description: string, categories: string[]) => {
   if (/手机|耳机|电脑|充电|数据线|数码|键盘|鼠标|屏幕/.test(text)) return knownCategory(categories, '数码');
   if (/水费|电费|燃气|煤气|物业|话费|网费|宽带|交费|缴费|充值/.test(text)) return knownCategory(categories, '交费');
   if (/维修|修理|保养|换屏|补胎|售后|配件|安装/.test(text)) return knownCategory(categories, '维修');
+  if (/大模型|模型token|token|API充值|ChatGPT|Claude|Gemini|AI订阅|AI服务/i.test(text)) return knownCategory(categories, 'AI服务');
   if (/检测|查重|服务|Turnitin/i.test(text)) return knownCategory(categories, '其他');
   if (/咖啡|啤酒|Heineken|喜力|饮料|奶茶|茶饮|美式|拿铁|牛奶|鲜奶|酸奶|发酵乳|矿泉水|纯净水|饮用水|水杯|冰杯|果汁|可乐|茶/.test(text)) {
     return knownCategory(categories, '饮料');
   }
-  if (/虾|鸡蛋|提|水果|果蔬|蔬菜|面包|餐|食材|冰淇淋|水饺|馒头|牛肉|猪肉|鸡肉|番茄|蒜米|金果|藜麦|鸡排|馅饼|生鲜|零食|食品|熟食|饼|饭|面|鱼|肉|蛋/.test(text)) {
+  if (/薯片|饼干|糖果|巧克力|坚果|零食/.test(text)) return knownCategory(categories, '零食');
+  if (/苹果|香蕉|橙子|葡萄|草莓|提子|水果|果切/.test(text)) return knownCategory(categories, '水果');
+  if (/虾|鸡蛋|果蔬|蔬菜|面包|餐|食材|冰淇淋|水饺|馒头|牛肉|猪肉|鸡肉|番茄|蒜米|金果|藜麦|鸡排|馅饼|生鲜|食品|熟食|饼|饭|面|鱼|肉|蛋/.test(text)) {
     return knownCategory(categories, '餐费');
   }
   return knownCategory(categories, '其他');

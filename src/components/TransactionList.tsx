@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Calendar, CheckSquare, ChevronDown, ChevronUp, CreditCard, Search, ShoppingBag, Square, Tag, Trash2, X } from 'lucide-react';
+import { Calendar, CheckSquare, ChevronDown, ChevronUp, CreditCard, Pencil, Save, Search, ShoppingBag, Square, Tag, Trash2, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { formatShortDate } from '../services/date';
 import { storage } from '../services/storage';
@@ -15,11 +15,13 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('全部');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<Transaction | null>(null);
   const [managing, setManaging] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const categories = useMemo(() => {
-    const historicalCategories = list.map(item => item.category);
+    const historicalCategories = list.flatMap(item => [item.category, ...(item.subItems?.map(subItem => subItem.category) ?? [])]);
     return Array.from(new Set([...settingsCategories, ...historicalCategories]));
   }, [list, settingsCategories]);
 
@@ -63,6 +65,8 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
     setManaging(current => !current);
     setSelectedIds([]);
     setExpandedId(null);
+    setEditingId(null);
+    setEditDraft(null);
   };
 
   const toggleSelected = (id: string) => {
@@ -97,6 +101,36 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
     setManaging(false);
     setExpandedId(null);
     onTransactionDeleted();
+  };
+
+  const startEditing = (item: Transaction) => {
+    setEditingId(item.id);
+    setEditDraft({
+      ...item,
+      subItems: item.subItems?.map(subItem => ({ ...subItem })),
+    });
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditDraft(null);
+  };
+
+  const saveEditing = () => {
+    if (!editDraft) return;
+    storage.saveTransaction(editDraft);
+    setList(storage.getTransactions());
+    setEditingId(null);
+    setEditDraft(null);
+    onTransactionDeleted();
+  };
+
+  const updateSubItem = (index: number, patch: Partial<NonNullable<Transaction['subItems']>[number]>) => {
+    if (!editDraft?.subItems) return;
+    setEditDraft({
+      ...editDraft,
+      subItems: editDraft.subItems.map((subItem, subItemIndex) => (subItemIndex === index ? { ...subItem, ...patch } : subItem)),
+    });
   };
 
   return (
@@ -204,13 +238,22 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                 <div className="glass-panel rounded-2xl overflow-hidden divide-y divide-black/[0.05]">
                   {grouped[date].items.map(item => {
                     const expanded = expandedId === item.id;
+                    const editing = editingId === item.id && editDraft?.id === item.id;
+                    const displayItem = editing ? editDraft : item;
                     const selected = selectedIds.includes(item.id);
                     const title = transactionTitle(item);
                     return (
                       <article key={item.id}>
                         <button
                           type="button"
-                          onClick={() => (managing ? toggleSelected(item.id) : setExpandedId(expanded ? null : item.id))}
+                          onClick={() => {
+                            if (managing) {
+                              toggleSelected(item.id);
+                              return;
+                            }
+                            if (editing) return;
+                            setExpandedId(expanded ? null : item.id);
+                          }}
                           className={`w-full p-3.5 flex items-center justify-between hover:bg-black/[0.02] transition-all text-left ${expanded ? 'bg-black/[0.01]' : ''}`}
                         >
                           <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -245,9 +288,9 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                           </div>
                         </button>
 
-                        <div className={`overflow-hidden transition-all duration-300 ${expanded ? 'max-h-[36rem] border-t border-black/[0.05] bg-black/[0.01]' : 'max-h-0'}`}>
+                        <div className={`transition-all duration-300 ${expanded ? 'max-h-[70dvh] overflow-y-auto border-t border-black/[0.05] bg-black/[0.01]' : 'max-h-0 overflow-hidden'}`}>
                           <div className="p-4 space-y-3.5">
-                            <p className="text-xs leading-relaxed font-medium bg-dark-surface border border-black/[0.06] rounded-xl p-2.5 select-text">{item.detail || item.description}</p>
+                            <p className="text-xs leading-relaxed font-medium bg-dark-surface border border-black/[0.06] rounded-xl p-2.5 select-text">{displayItem.detail || displayItem.description}</p>
                             {item.recognition && (
                               <div className="rounded-xl border border-brand-purple/15 bg-brand-purple/8 p-2.5 space-y-1">
                                 <div className="text-[10px] font-bold text-brand-purple flex items-center justify-between">
@@ -261,25 +304,42 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                                 )}
                               </div>
                             )}
-                            {item.subItems?.length ? (
+                            {displayItem.subItems?.length ? (
                               <div className="space-y-2">
                                 <div className="flex items-center justify-between text-[10px] text-dark-muted px-1">
                                   <span>商品明细</span>
-                                  <span>{item.subItems.length} 项</span>
+                                  <span>{displayItem.subItems.length} 项</span>
                                 </div>
                                 <div className="rounded-xl border border-black/[0.06] bg-dark-surface divide-y divide-black/[0.05] overflow-hidden">
-                                  {item.subItems.map((subItem, index) => (
-                                    <div key={`${subItem.description}-${index}`} className="p-2.5 flex items-start justify-between gap-3">
+                                  {displayItem.subItems.map((subItem, index) => (
+                                    <div key={`${subItem.description}-${index}`} className={`p-2.5 gap-3 ${editing ? 'space-y-2' : 'flex items-start justify-between'}`}>
                                       <div className="min-w-0 flex-1 space-y-1">
                                         <div className="flex items-center gap-1.5 min-w-0">
                                           <span className="text-sm shrink-0">{getCategoryEmoji(subItem.category)}</span>
                                           <span className="text-xs font-semibold truncate">{subItem.description}</span>
                                         </div>
-                                        <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-dark-muted">
-                                          <span className="bg-black/[0.03] border border-black/[0.05] rounded px-1.5 py-0.5">{subItem.category}</span>
-                                          {subItem.quantity && <span>{subItem.quantity}</span>}
-                                          {subItem.tag && <span>{subItem.tag}</span>}
-                                        </div>
+                                        {editing ? (
+                                          <div className="grid grid-cols-2 gap-2">
+                                            <EditSelect
+                                              ariaLabel={`${subItem.description}分类`}
+                                              categories={categories}
+                                              value={subItem.category}
+                                              onChange={category => updateSubItem(index, { category })}
+                                            />
+                                            <EditInput
+                                              ariaLabel={`${subItem.description}标签`}
+                                              placeholder="标签（可选）"
+                                              value={subItem.tag ?? ''}
+                                              onChange={tag => updateSubItem(index, { tag: tag.trim() || undefined })}
+                                            />
+                                          </div>
+                                        ) : (
+                                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-dark-muted">
+                                            <span className="bg-black/[0.03] border border-black/[0.05] rounded px-1.5 py-0.5">{subItem.category}</span>
+                                            {subItem.quantity && <span>{subItem.quantity}</span>}
+                                            {subItem.tag && <span>{subItem.tag}</span>}
+                                          </div>
+                                        )}
                                       </div>
                                       <span className="text-xs font-bold font-mono shrink-0">¥{subItem.amount.toFixed(2)}</span>
                                     </div>
@@ -287,20 +347,68 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                                 </div>
                               </div>
                             ) : null}
-                            <div className="grid grid-cols-2 gap-2">
-                              <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类" value={`${getCategoryEmoji(item.category)} ${item.category}`} />
-                              {item.paymentMethod && <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={item.paymentMethod} />}
-                              <Detail icon={<Calendar size={14} className="text-brand-blue" />} label="日期" value={item.date} />
-                              <Detail icon={<Tag size={14} className="text-brand-neon" />} label="标签" value={item.tag ?? '无'} />
-                            </div>
+                            {editing ? (
+                              <div className="grid grid-cols-2 gap-2">
+                                <EditField label="分类">
+                                  <EditSelect
+                                    ariaLabel="账单分类"
+                                    categories={categories}
+                                    value={displayItem.category}
+                                    onChange={category => setEditDraft({ ...displayItem, category })}
+                                  />
+                                </EditField>
+                                <EditField label="日期">
+                                  <EditInput
+                                    ariaLabel="账单日期"
+                                    type="date"
+                                    value={displayItem.date}
+                                    onChange={date => setEditDraft({ ...displayItem, date })}
+                                  />
+                                </EditField>
+                                <EditField label="标签">
+                                  <EditInput
+                                    ariaLabel="账单标签"
+                                    placeholder="标签（可选）"
+                                    value={displayItem.tag ?? ''}
+                                    onChange={tag => setEditDraft({ ...displayItem, tag: tag.trim() || undefined })}
+                                  />
+                                </EditField>
+                                {displayItem.paymentMethod && <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={displayItem.paymentMethod} />}
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类" value={`${getCategoryEmoji(item.category)} ${item.category}`} />
+                                {item.paymentMethod && <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={item.paymentMethod} />}
+                                <Detail icon={<Calendar size={14} className="text-brand-blue" />} label="日期" value={item.date} />
+                                <Detail icon={<Tag size={14} className="text-brand-neon" />} label="标签" value={item.tag ?? '无'} />
+                              </div>
+                            )}
                             <div className="flex justify-end gap-2 pt-1 border-t border-black/[0.05]">
-                              <button type="button" onClick={() => setExpandedId(null)} className="px-3.5 py-1.5 bg-black/[0.05] text-dark-muted rounded-lg text-[10px] font-semibold">
-                                收起详情
-                              </button>
-                              <button type="button" onClick={() => deleteItem(item.id)} className="px-3.5 py-1.5 bg-brand-rose/10 text-brand-rose rounded-lg border border-brand-rose/20 text-[10px] font-bold flex items-center gap-1">
-                                <Trash2 size={12} />
-                                删除
-                              </button>
+                              {editing ? (
+                                <>
+                                  <button type="button" onClick={cancelEditing} className="px-3.5 py-1.5 bg-black/[0.05] text-dark-muted rounded-lg text-[10px] font-semibold">
+                                    取消
+                                  </button>
+                                  <button type="button" onClick={saveEditing} className="px-3.5 py-1.5 bg-brand-purple/10 text-brand-purple rounded-lg border border-brand-purple/20 text-[10px] font-bold flex items-center gap-1">
+                                    <Save size={12} />
+                                    保存修改
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button type="button" onClick={() => startEditing(item)} className="px-3.5 py-1.5 bg-brand-purple/10 text-brand-purple rounded-lg border border-brand-purple/20 text-[10px] font-bold flex items-center gap-1">
+                                    <Pencil size={12} />
+                                    编辑
+                                  </button>
+                                  <button type="button" onClick={() => setExpandedId(null)} className="px-3.5 py-1.5 bg-black/[0.05] text-dark-muted rounded-lg text-[10px] font-semibold">
+                                    收起详情
+                                  </button>
+                                  <button type="button" onClick={() => deleteItem(item.id)} className="px-3.5 py-1.5 bg-brand-rose/10 text-brand-rose rounded-lg border border-brand-rose/20 text-[10px] font-bold flex items-center gap-1">
+                                    <Trash2 size={12} />
+                                    删除
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -334,5 +442,66 @@ function Detail({ icon, label, value }: { icon: React.ReactNode; label: string; 
         <span className="text-[11px] font-semibold truncate block">{value}</span>
       </div>
     </div>
+  );
+}
+
+function EditField({ children, label }: { children: React.ReactNode; label: string }) {
+  return (
+    <label className="bg-dark-surface border border-black/[0.06] rounded-xl p-2 space-y-1 min-w-0">
+      <span className="text-[9px] text-dark-muted block">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function EditInput({
+  ariaLabel,
+  onChange,
+  placeholder,
+  type = 'text',
+  value,
+}: {
+  ariaLabel: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+  value: string;
+}) {
+  return (
+    <input
+      aria-label={ariaLabel}
+      type={type}
+      placeholder={placeholder}
+      value={value}
+      onChange={event => onChange(event.target.value)}
+      className="w-full min-w-0 text-[11px] bg-white/70 border border-black/[0.08] rounded-lg px-2 py-1.5 focus:outline-none focus:border-brand-purple"
+    />
+  );
+}
+
+function EditSelect({
+  ariaLabel,
+  categories,
+  onChange,
+  value,
+}: {
+  ariaLabel: string;
+  categories: string[];
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <select
+      aria-label={ariaLabel}
+      value={value}
+      onChange={event => onChange(event.target.value)}
+      className="w-full min-w-0 text-[11px] bg-white/70 border border-black/[0.08] rounded-lg px-2 py-1.5 focus:outline-none focus:border-brand-purple"
+    >
+      {categories.map(category => (
+        <option key={category} value={category}>
+          {category}
+        </option>
+      ))}
+    </select>
   );
 }

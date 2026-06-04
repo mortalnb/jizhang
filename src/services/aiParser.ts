@@ -8,7 +8,10 @@ const findCategory = (text: string, categories: string[]) => {
   if (direct) return direct;
 
   if (/咖啡|奶茶|饮料|可乐|茶饮|啤酒|酒水|果汁|美式|拿铁/.test(text)) return categories.includes('饮料') ? '饮料' : categories[0];
-  if (/饭|餐|面包|水果|果蔬|蔬菜|鸡蛋|肉|虾|外卖|火锅|麦当劳|盒马|食材/.test(text)) return categories.includes('餐费') ? '餐费' : categories[0];
+  if (/薯片|饼干|糖果|巧克力|坚果|零食/.test(text)) return categories.includes('零食') ? '零食' : categories[0];
+  if (/苹果|香蕉|橙子|葡萄|草莓|水果|果切/.test(text)) return categories.includes('水果') ? '水果' : categories[0];
+  if (/大模型|模型token|token|API充值|ChatGPT|Claude|Gemini|AI订阅|AI服务/i.test(text)) return categories.includes('AI服务') ? 'AI服务' : categories[0];
+  if (/饭|餐|面包|果蔬|蔬菜|鸡蛋|肉|虾|外卖|火锅|麦当劳|盒马|食材/.test(text)) return categories.includes('餐费') ? '餐费' : categories[0];
   if (/地铁|公交|打车|网约车|加油|停车/.test(text)) return categories.includes('交通') ? '交通' : categories[0];
   if (/电影|游戏|演出|音乐|会员/.test(text)) return categories.includes('娱乐') ? '娱乐' : categories[0];
   if (/纸巾|洗|清洁|超市|日用|牙膏/.test(text)) return categories.includes('日用') ? '日用' : categories[0];
@@ -163,7 +166,12 @@ export const aiParser = {
           messages: [
             {
               role: 'system',
-              content: `你是记账助手。请从用户输入中提取 JSON：amount, category, paymentMethod, description, detail, date, tag, splitItems。splitItems 的每一项可包含 amount, category, description, detail, tag。category 必须属于：${categories.join(', ')}。description 必须是适合账单列表展示的凝练标题，4 到 12 个中文字符左右，不要写解释。detail 用一句稍微更详细的中文说明消费场景、归类依据或拆单依据，避免编造不存在的商户和金额。今天是 ${todayISO()}。只返回 JSON。`,
+              content: `你是记账助手。请从用户输入中提取 JSON：amount, category, paymentMethod, description, detail, date, tag, splitItems。splitItems 的每一项可包含 amount, category, description, detail, tag。category 必须属于：${categories.join(', ')}。description 必须是适合账单列表展示的凝练标题，4 到 12 个中文字符左右，不要写解释。detail 用一句稍微更详细的中文说明消费场景、归类依据或拆单依据，避免编造不存在的商户和金额。
+
+AA 或多人分摊场景只记录用户最终承担的净支出，必须返回单笔账单，不要生成 splitItems。金额判断优先级：如果提供了用户实际付款和收到的回款，amount 等于实际付款减去回款；如果提供了实际转账金额，不得强制按人数平均；只有明确说明平均 AA 且没有提供实际回款金额时，才用总金额除以人数。
+示例：“我付了 120，他转我 60”应返回 amount 60；“3 个人吃饭花了 300，是 AA 的”应返回 amount 100；“两人吃饭 163，我付的，他只转我 80”应返回 amount 83。AA 场景的 detail 应说明这是用户最终承担金额。
+
+今天是 ${todayISO()}。只返回 JSON。`,
             },
             { role: 'user', content: text },
           ],

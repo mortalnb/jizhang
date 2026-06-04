@@ -20,9 +20,9 @@ const migrateCategories = (categories?: string[]) => {
   const source = categories?.length ? categories : DEFAULT_CATEGORIES;
   const migrated = source.flatMap(category => (category === '餐饮' ? ['餐费', '饮料'] : [category]));
   const unique = Array.from(new Set(migrated.filter(Boolean)));
-  const withoutRequired = unique.filter(category => category !== '交费' && category !== '维修');
+  const required = ['零食', '水果', 'AI服务', '交费', '维修'];
+  const withoutRequired = unique.filter(category => !required.includes(category));
   const otherIndex = withoutRequired.indexOf('其他');
-  const required = ['交费', '维修'];
   if (otherIndex >= 0) {
     return [...withoutRequired.slice(0, otherIndex), ...required, ...withoutRequired.slice(otherIndex)];
   }

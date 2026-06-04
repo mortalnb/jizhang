@@ -27,7 +27,10 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   const normalizeCategory = (category: string, text = '') => {
     if (categories.includes(category)) return category;
     const source = `${category} ${text}`;
-    if (/生鲜|零食|食品|水果|果蔬|蔬菜|饭|餐|肉|蛋|鱼|虾|面包|水饺|馒头/.test(source)) return categories.includes('餐费') ? '餐费' : categories[0];
+    if (/薯片|饼干|糖果|巧克力|坚果|零食/.test(source)) return categories.includes('零食') ? '零食' : categories[0];
+    if (/苹果|香蕉|橙子|葡萄|草莓|水果|果切/.test(source)) return categories.includes('水果') ? '水果' : categories[0];
+    if (/大模型|模型token|token|API充值|ChatGPT|Claude|Gemini|AI订阅|AI服务/i.test(source)) return categories.includes('AI服务') ? 'AI服务' : categories[0];
+    if (/生鲜|食品|果蔬|蔬菜|饭|餐|肉|蛋|鱼|虾|面包|水饺|馒头/.test(source)) return categories.includes('餐费') ? '餐费' : categories[0];
     if (/饮料|咖啡|奶茶|牛奶|酸奶|发酵乳|水|啤酒|茶|果汁/.test(source)) return categories.includes('饮料') ? '饮料' : categories[0];
     if (/日用|清洁|洗|纸巾|牙膏|湿巾/.test(source)) return categories.includes('日用') ? '日用' : categories[0];
     if (/鞋|衣|裤|服饰/.test(source)) return categories.includes('服饰') ? '服饰' : categories[0];

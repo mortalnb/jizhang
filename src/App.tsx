@@ -21,7 +21,7 @@ export default function App() {
           <span className="text-base font-black tracking-wider">记账</span>
         </div>
         <span className="text-[10px] text-dark-muted font-semibold bg-white/70 border border-black/[0.06] px-2.5 py-1 rounded-full uppercase tracking-wider font-mono">
-          v1.4.0
+          v1.4.1
         </span>
       </header>
 
