@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String           @id @default(cuid())
+  username       String           @unique
+  passwordHash   String           @map("password_hash")
+  displayName    String?          @map("display_name")
+  isEnabled      Boolean          @default(true) @map("is_enabled")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+  deviceBinding  DeviceBinding?
+  entitlement    UserEntitlement?
+  sessions       AuthSession[]
+  usageEvents    UsageEvent[]
+
+  @@map("users")
+}
+
+model DeviceBinding {
+  userId     String   @id @map("user_id")
+  deviceId   String   @map("device_id")
+  deviceLabel String? @map("device_label")
+  boundAt    DateTime @default(now()) @map("bound_at")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("device_bindings")
+}
+
+model AuthSession {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  deviceId         String   @map("device_id")
+  refreshTokenHash String   @map("refresh_token_hash")
+  expiresAt        DateTime @map("expires_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model UserEntitlement {
+  userId           String    @id @map("user_id")
+  canUseModelProxy Boolean   @default(false) @map("can_use_model_proxy")
+  dailyLimit       Int       @default(100) @map("daily_limit")
+  monthlyLimit     Int       @default(3000) @map("monthly_limit")
+  allowedModels    String[]  @default(["mimo-v2.5"]) @map("allowed_models")
+  expiresAt        DateTime? @map("expires_at")
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_entitlements")
+}
+
+model UsageEvent {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  endpoint  String
+  model     String
+  costUnits Int      @default(1) @map("cost_units")
+  success   Boolean
+  errorCode String?  @map("error_code")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("usage_events")
+}

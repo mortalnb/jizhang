@@ -1,6 +1,8 @@
 import { CapacitorPluginMlKitTextRecognition } from '@pantrist/capacitor-plugin-ml-kit-text-recognition';
 import type { AppSettings, ParsedTransaction, SplitItem } from '../types';
+import { cloudApi } from './cloudApi';
 import { todayISO } from './date';
+import { storage } from './storage';
 
 export type BillSource = 'hema' | 'taobao' | 'generic';
 
@@ -859,7 +861,25 @@ const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], s
   };
 };
 
-const recognizeWithMimoVision = async (file: File, categories: string[], settings?: Pick<AppSettings, 'apiKey' | 'baseUrl' | 'model'>) => {
+const recognizeWithMimoVision = async (file: File, categories: string[], settings?: Pick<AppSettings, 'apiKey' | 'baseUrl' | 'cloudBaseUrl' | 'model'>) => {
+  const imageUrl = await imageToDataUrlForVision(file);
+  if (settings && storage.getCloudSession()?.accessToken) {
+    try {
+      const parsed = await cloudApi.recognizeBillImage(settings as Pick<AppSettings, 'cloudBaseUrl' | 'model'>, imageUrl, categories);
+      const source = sourceFromVision(parsed);
+      return {
+        mode: 'vision',
+        source,
+        sourceLabel: parsed.sourceLabel || SOURCE_LABELS[source],
+        confidence: 0.93,
+        rawText: JSON.stringify(parsed, null, 2),
+        result: normalizeVisionResult(parsed, categories, source),
+      } satisfies RecognizedBill;
+    } catch (error) {
+      console.warn('Cloud vision recognition failed, falling back to configured/local recognition.', error);
+    }
+  }
+
   const apiKey = settings?.apiKey?.trim();
   const useDevProxy = import.meta.env.DEV;
   if (!apiKey && !useDevProxy) return undefined;
@@ -868,7 +888,6 @@ const recognizeWithMimoVision = async (file: File, categories: string[], setting
   const configuredModel = settings?.model?.trim() || '';
   const baseUrl = (/xiaomimimo\.com/i.test(configuredBaseUrl) ? configuredBaseUrl : 'https://api.xiaomimimo.com').replace(/\/$/, '');
   const model = /^mimo/i.test(configuredModel) ? configuredModel : 'mimo-v2.5';
-  const imageUrl = await imageToDataUrlForVision(file);
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 90_000);
 
@@ -931,7 +950,7 @@ const recognizeWithMimoVision = async (file: File, categories: string[], setting
   }
 };
 
-export const recognizeBillImage = async (file: File, categories: string[], settings?: Pick<AppSettings, 'apiKey' | 'baseUrl' | 'model'>): Promise<RecognizedBill> => {
+export const recognizeBillImage = async (file: File, categories: string[], settings?: Pick<AppSettings, 'apiKey' | 'baseUrl' | 'cloudBaseUrl' | 'model'>): Promise<RecognizedBill> => {
   const fixture = await guessFixture(file);
 
   try {

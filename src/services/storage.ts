@@ -1,9 +1,11 @@
 import { DEFAULT_CATEGORIES } from '../data/categories';
-import type { AppSettings, Transaction } from '../types';
+import type { AppSettings, CloudSession, Transaction } from '../types';
 
 const TRANSACTIONS_KEY = 'ab_transactions';
 const SETTINGS_KEY = 'ab_settings';
 const SCHEMA_KEY = 'ab_schema_version';
+const CLOUD_SESSION_KEY = 'ab_cloud_session';
+const DEVICE_ID_KEY = 'ab_device_id';
 const CURRENT_SCHEMA_VERSION = '2';
 const SEED_ID_PATTERN = /^seed-00[1-9]$/;
 const LEGACY_MODEL_PATTERN = new RegExp(['deep', 'seek'].join(''), 'i');
@@ -11,6 +13,7 @@ const LEGACY_MODEL_PATTERN = new RegExp(['deep', 'seek'].join(''), 'i');
 export const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
   baseUrl: 'https://api.xiaomimimo.com',
+  cloudBaseUrl: import.meta.env.VITE_CLOUD_BASE_URL || '',
   model: 'mimo-v2.5',
   monthlyBudget: 3000,
   categories: DEFAULT_CATEGORIES,
@@ -45,6 +48,7 @@ const normalizeSettings = (settings: AppSettings): AppSettings => ({
   ...DEFAULT_SETTINGS,
   ...settings,
   baseUrl: LEGACY_MODEL_PATTERN.test(settings.baseUrl) ? DEFAULT_SETTINGS.baseUrl : settings.baseUrl || DEFAULT_SETTINGS.baseUrl,
+  cloudBaseUrl: settings.cloudBaseUrl?.trim() || DEFAULT_SETTINGS.cloudBaseUrl,
   model: LEGACY_MODEL_PATTERN.test(settings.model) ? DEFAULT_SETTINGS.model : settings.model || DEFAULT_SETTINGS.model,
   categories: migrateCategories(settings.categories),
 });
@@ -106,9 +110,35 @@ export const storage = {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalizeSettings(settings)));
   },
 
+  getCloudSession(): CloudSession | null {
+    try {
+      const raw = localStorage.getItem(CLOUD_SESSION_KEY);
+      return raw ? (JSON.parse(raw) as CloudSession) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  saveCloudSession(session: CloudSession | null) {
+    if (!session) {
+      localStorage.removeItem(CLOUD_SESSION_KEY);
+      return;
+    }
+    localStorage.setItem(CLOUD_SESSION_KEY, JSON.stringify(session));
+  },
+
+  getDeviceId() {
+    const existing = localStorage.getItem(DEVICE_ID_KEY);
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+    return id;
+  },
+
   resetAll() {
     localStorage.removeItem(TRANSACTIONS_KEY);
     localStorage.removeItem(SETTINGS_KEY);
     localStorage.removeItem(SCHEMA_KEY);
+    localStorage.removeItem(CLOUD_SESSION_KEY);
   },
 };

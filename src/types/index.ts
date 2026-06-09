@@ -18,9 +18,28 @@ export interface Transaction {
 export interface AppSettings {
   apiKey: string;
   baseUrl: string;
+  cloudBaseUrl: string;
   model: string;
   monthlyBudget: number;
   categories: string[];
+}
+
+export interface CloudSession {
+  accessToken: string;
+  entitlement?: {
+    allowedModels: string[];
+    canUseModelProxy: boolean;
+    dailyLimit: number;
+    expiresAt?: string | null;
+    monthlyLimit: number;
+  } | null;
+  refreshToken?: string;
+  user: {
+    displayName?: string | null;
+    id: string;
+    isEnabled: boolean;
+    username: string;
+  };
 }
 
 export interface SplitItem {

@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.toolchain
 dist
 dist-ssr
 coverage
@@ -15,6 +16,8 @@ coverage
 .tmp-test-cjs
 testphoto
 key.txt
+*.keystore
+*.jks
 *.local
 .env
 .env.*
@@ -30,6 +33,9 @@ android/capacitor-cordova-android-plugins/
 *.aab
 *.ap_
 *.aar
+*.idsig
+jizhang-web-dist.tar
+.tmp-release/
 
 # Editor directories and files
 .vscode/*

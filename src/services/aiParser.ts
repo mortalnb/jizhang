@@ -1,5 +1,7 @@
 import type { AppSettings, ParsedTransaction, SplitItem } from '../types';
+import { cloudApi } from './cloudApi';
 import { todayISO } from './date';
+import { storage } from './storage';
 
 const PAYMENT_METHODS = ['微信支付', '支付宝', '银行卡', '现金'];
 
@@ -145,6 +147,15 @@ const normalizeRemoteResult = (parsed: Partial<ParsedTransaction>, text: string,
 export const aiParser = {
   async parse(text: string, settings: AppSettings): Promise<ParsedTransaction> {
     const categories = settings.categories.length ? settings.categories : ['其他'];
+    if (storage.getCloudSession()?.accessToken) {
+      try {
+        const cloudResult = await cloudApi.parseTransaction(settings, text, categories);
+        return normalizeRemoteResult(cloudResult, text, categories);
+      } catch (error) {
+        console.warn('Cloud AI parse failed, falling back to configured/local parser.', error);
+      }
+    }
+
     const useDevProxy = import.meta.env.DEV;
     if (!settings.apiKey.trim() && !useDevProxy) {
       await new Promise(resolve => setTimeout(resolve, 450));

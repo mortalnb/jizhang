@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BookText, ListCollapse, Settings as SettingsIcon, Sparkles, TrendingUp } from 'lucide-react';
+import { BookText, ListCollapse, Plus, Settings as SettingsIcon, TrendingUp } from 'lucide-react';
 import { AIInput } from './components/AIInput';
 import { Dashboard } from './components/Dashboard';
 import { Settings } from './components/Settings';
@@ -18,10 +18,10 @@ export default function App() {
           <div className="w-8 h-8 rounded-xl bg-dark-surface border border-black/[0.06] flex items-center justify-center shadow-sm">
             <BookText size={16} className="text-brand-purple" />
           </div>
-          <span className="text-base font-black tracking-wider">记账</span>
+          <span className="text-base font-semibold tracking-normal">记账</span>
         </div>
         <span className="text-[10px] text-dark-muted font-semibold bg-white/70 border border-black/[0.06] px-2.5 py-1 rounded-full uppercase tracking-wider font-mono">
-          v1.4.1
+          v1.4.3
         </span>
       </header>
 
@@ -45,13 +45,13 @@ export default function App() {
         <NavButton active={activeTab === 'transactions'} label="明细" icon={ListCollapse} onClick={() => setActiveTab('transactions')} />
         <button
           type="button"
-          aria-label="AI 记账"
+          aria-label="记一笔"
           onClick={() => setActiveTab('input')}
-          className={`relative -top-3 mx-auto w-13 h-13 rounded-full bg-gradient-to-tr from-brand-purple to-brand-blue flex items-center justify-center shadow-lg shadow-brand-purple/20 border border-white/60 active:scale-95 transition-all ${
-            activeTab === 'input' ? 'scale-110 shadow-[0_4px_20px_rgba(79,70,229,0.3)]' : ''
+          className={`relative -top-3 mx-auto w-13 h-13 rounded-full bg-brand-purple flex items-center justify-center shadow-md shadow-slate-900/10 border border-white active:scale-95 transition-all ${
+            activeTab === 'input' ? 'scale-105 bg-brand-blue' : ''
           }`}
         >
-          <Sparkles size={22} className="text-white" />
+          <Plus size={23} className="text-white" />
         </button>
         <NavButton active={activeTab === 'settings'} label="设置" icon={SettingsIcon} onClick={() => setActiveTab('settings')} />
       </nav>
@@ -75,11 +75,11 @@ function NavButton({
       type="button"
       onClick={onClick}
       className={`flex flex-col items-center gap-1 py-1.5 px-2 rounded-xl transition-all active:scale-95 ${
-        active ? 'text-brand-purple scale-105' : 'text-dark-muted hover:text-dark-text'
+        active ? 'text-brand-purple' : 'text-dark-muted hover:text-dark-text'
       }`}
     >
-      <Icon size={20} className={active ? 'neon-text-glow' : ''} />
-      <span className="text-[9px] font-bold tracking-wider">{label}</span>
+      <Icon size={20} />
+      <span className="text-[9px] font-semibold tracking-normal">{label}</span>
     </button>
   );
 }

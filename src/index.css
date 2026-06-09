@@ -1,19 +1,19 @@
 @import "tailwindcss";
 
 @theme {
-  --color-dark-bg: #f6f7fb; /* 极简现代浅灰背景 */
-  --color-dark-card: rgba(255, 255, 255, 0.86); /* 晶莹透亮玻璃卡片 */
-  --color-dark-surface: #eef2f7; /* 二级微灰表面 */
-  --color-dark-text: #0f172a; /* 主要深石板灰文字 */
-  --color-dark-muted: #64748b; /* 优雅烟灰文字 */
-  
-  --color-brand-cyan: #0284c7; /* 湖光蓝色 */
-  --color-brand-purple: #4f46e5; /* 经典靛蓝 */
-  --color-brand-blue: #2563eb; /* 蔚深蓝色 */
-  --color-brand-neon: #7c3aed; /* 亮罗兰紫 */
-  --color-brand-rose: #e11d48; /* 玫瑰雅红 */
-  --color-brand-orange: #d97706; /* 琥珀蜜橙 */
-  --color-brand-success: #059669; /* 翡翠碧绿 */
+  --color-dark-bg: #f7f8f5;
+  --color-dark-card: #ffffff;
+  --color-dark-surface: #eef1ec;
+  --color-dark-text: #17211c;
+  --color-dark-muted: #6b756f;
+
+  --color-brand-cyan: #2f7d7a;
+  --color-brand-purple: #2f6f5e;
+  --color-brand-blue: #3b6f8f;
+  --color-brand-neon: #56665c;
+  --color-brand-rose: #b94747;
+  --color-brand-orange: #b77935;
+  --color-brand-success: #2f7d5a;
 
   --animate-pulse-glow: pulseGlow 2s infinite;
   --animate-fade-in: fadeIn 0.3s ease-out forwards;
@@ -22,11 +22,11 @@
   @keyframes pulseGlow {
     0%, 100% {
       opacity: 0.8;
-      box-shadow: 0 0 15px rgba(79, 70, 229, 0.1);
+      box-shadow: 0 0 15px rgba(47, 111, 94, 0);
     }
     50% {
       opacity: 1;
-      box-shadow: 0 0 25px rgba(79, 70, 229, 0.25);
+      box-shadow: 0 0 25px rgba(47, 111, 94, 0);
     }
   }
   @keyframes fadeIn {
@@ -42,7 +42,7 @@
 @layer base {
   html {
     min-height: 100%;
-    background: #f6f7fb;
+    background: #f7f8f5;
   }
 
   body {
@@ -61,23 +61,23 @@
 }
 
 .app-header {
-  background: rgba(246, 247, 251, 0.94);
-  border-bottom: 1px solid rgba(15, 23, 42, 0.05);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.03);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(247, 248, 245, 0.96);
+  border-bottom: 1px solid rgba(23, 33, 28, 0.07);
+  box-shadow: 0 8px 24px rgba(23, 33, 28, 0.025);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .app-main {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(246, 247, 251, 0));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(247, 248, 245, 0));
 }
 
 .app-nav {
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(15, 23, 42, 0.07);
-  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.08);
-  backdrop-filter: blur(22px);
-  -webkit-backdrop-filter: blur(22px);
+  background: #ffffff;
+  border: 1px solid rgba(23, 33, 28, 0.08);
+  box-shadow: 0 14px 38px rgba(23, 33, 28, 0.09);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .safe-top {
@@ -101,50 +101,45 @@
   padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
 }
 
-/* 晶莹浅色玻璃卡片样式 (Glassmorphism Light) */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(15, 23, 42, 0.07);
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+  background: #ffffff;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(23, 33, 28, 0.08);
+  box-shadow: 0 10px 30px rgba(23, 33, 28, 0.06);
 }
 
 .glass-panel-light {
-  background: rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(15, 23, 42, 0.04);
+  background: rgba(255, 255, 255, 0.72);
+
+  border: 1px solid rgba(23, 33, 28, 0.06);
 }
 
 .glass-panel-heavy {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  box-shadow: 0 10px 40px -10px rgba(15, 23, 42, 0.08);
+  background: #ffffff;
+
+  border: 1px solid rgba(23, 33, 28, 0.09);
+  box-shadow: 0 10px 40px -10px rgba(23, 33, 28, 0.09);
 }
 
-/* 霓虹发光与微光 */
 .neon-border-glow {
-  box-shadow: 0 0 15px rgba(79, 70, 229, 0.08), inset 0 0 15px rgba(79, 70, 229, 0.03);
+  box-shadow: none;
 }
 
 .neon-border-glow-purple {
-  box-shadow: 0 0 15px rgba(124, 58, 237, 0.08), inset 0 0 15px rgba(124, 58, 237, 0.03);
+  box-shadow: none;
 }
 
 .neon-text-glow {
-  text-shadow: 0 0 8px rgba(79, 70, 229, 0.2);
+  text-shadow: none;
 }
 
 .radial-bg-glow {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(246, 247, 251, 0) 28%),
-    linear-gradient(135deg, #f6f7fb 0%, #eef3f9 48%, #f7f8fb 100%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(247, 248, 245, 0) 28%),
+    linear-gradient(135deg, #f7f8f5 0%, #eef1ec 48%, #f8f7f2 100%);
 }
 
-/* 无滚动条滚动区 */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -153,8 +148,7 @@
   scrollbar-width: none;
 }
 
-/* 输入法聚焦呼吸光效果 */
 .ai-pulse-glow:focus-within {
-  animation: pulseGlow 2s infinite;
-  border-color: rgba(79, 70, 229, 0.35);
+  border-color: rgba(47, 111, 94, 0.42);
+  box-shadow: 0 0 0 3px rgba(47, 111, 94, 0.08);
 }

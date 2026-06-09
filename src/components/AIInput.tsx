@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Calendar, Check, CreditCard, DollarSign, Image, RefreshCw, Send, Sparkles, Tag, X } from 'lucide-react';
+import { Calendar, Check, CreditCard, DollarSign, Image, Loader2, ReceiptText, RefreshCw, Send, Tag, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { aiParser } from '../services/aiParser';
 import { parseBillText, recognizeBillImage, sourceOptions, type BillSource, type RecognizedBill } from '../services/billRecognition';
@@ -160,13 +160,13 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     <div className="w-full max-w-md mx-auto p-4 space-y-6 animate-slide-up pb-24">
       <section className="space-y-1">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          AI 智能记账 <Sparkles size={18} className="text-brand-purple animate-pulse" />
+          记一笔 <ReceiptText size={18} className="text-brand-purple" />
         </h1>
         <p className="text-xs text-dark-muted">输入一句话或导入账单截图，确认后保存到本地账本。</p>
       </section>
 
       {!parsedCard && !loading && !success && (
-        <section className="glass-panel rounded-2xl p-4 space-y-4 shadow-lg shadow-brand-purple/5">
+        <section className="glass-panel rounded-2xl p-4 space-y-4">
           <div className="relative ai-pulse-glow rounded-xl border border-black/[0.08] overflow-hidden bg-white/50 transition-all">
             <textarea
               rows={5}
@@ -179,7 +179,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
               type="button"
               disabled={!inputText.trim()}
               onClick={() => parse(inputText)}
-              className="absolute right-3 bottom-3 p-2 bg-gradient-to-r from-brand-purple to-brand-blue disabled:opacity-40 text-white rounded-lg shadow transition-all active:scale-95"
+              className="absolute right-3 bottom-3 p-2 bg-brand-purple disabled:opacity-40 text-white rounded-lg shadow-sm transition-all active:scale-95"
               aria-label="解析记账文本"
             >
               <Send size={14} />
@@ -200,7 +200,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="w-full py-3.5 bg-black/[0.02] border border-black/[0.08] hover:border-brand-purple/40 hover:bg-brand-purple/[0.04] active:scale-95 font-medium rounded-xl flex items-center justify-center gap-2 transition-all shadow-inner"
+            className="w-full py-3.5 bg-dark-surface border border-black/[0.06] hover:border-brand-purple/35 hover:bg-brand-purple/[0.04] active:scale-95 font-medium rounded-xl flex items-center justify-center gap-2 transition-all"
           >
             <Image size={18} className="text-brand-purple" />
             导入盒马/淘宝截图并自动拆单
@@ -209,9 +209,9 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
       )}
 
       {loading && (
-        <section className="glass-panel rounded-2xl p-8 flex flex-col items-center justify-center space-y-4 animate-pulse border border-brand-purple/20">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-brand-purple to-brand-cyan flex items-center justify-center shadow-lg shadow-brand-purple/25">
-            <Sparkles size={16} className="text-white animate-spin" />
+        <section className="glass-panel rounded-2xl p-8 flex flex-col items-center justify-center space-y-4 border border-brand-purple/15">
+          <div className="w-10 h-10 rounded-full bg-brand-purple/10 border border-brand-purple/20 flex items-center justify-center">
+            <Loader2 size={17} className="text-brand-purple animate-spin" />
           </div>
           <p className="text-sm font-semibold">
             {loadingMode === 'image' ? '正在识别截图来源、提取商品和金额...' : '正在解析文字内容、提取金额和分类...'}
@@ -232,7 +232,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
       )}
 
       {parsedCard && !loading && (
-        <section className="glass-panel rounded-2xl p-5 border border-brand-purple/20 space-y-5 animate-slide-up shadow-lg">
+        <section className="glass-panel rounded-2xl p-5 border border-brand-purple/15 space-y-5 animate-slide-up">
           <div className="flex justify-between items-center border-b border-black/[0.06] pb-2">
             <div className="space-y-0.5">
               <span className="text-sm font-bold text-brand-purple">解析结果确认</span>
@@ -320,7 +320,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
 
           {parsedCard.splitItems?.length ? (
             <div className="space-y-3">
-              <p className="text-xs text-brand-neon font-bold">智能拆单明细</p>
+              <p className="text-xs text-brand-purple font-bold">拆单明细</p>
               {parsedCard.splitItems.map((item, index) => (
                 <div key={`${item.description}-${index}`} className="bg-black/[0.01] border border-black/[0.05] rounded-xl p-3 space-y-2.5">
                   <div className="grid grid-cols-2 gap-2">
@@ -376,7 +376,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
             >
               取消
             </button>
-            <button type="button" onClick={save} className="flex-1 py-3 bg-gradient-to-r from-brand-purple to-brand-blue text-white text-xs font-bold rounded-xl shadow-md shadow-brand-purple/20 flex items-center justify-center gap-1.5">
+            <button type="button" onClick={save} className="flex-1 py-3 bg-brand-purple text-white text-xs font-bold rounded-xl shadow-sm flex items-center justify-center gap-1.5">
               <Check size={16} />
               确认入账
             </button>
@@ -420,7 +420,7 @@ function CategoryPicker({
             compact ? 'px-2.5 py-1 shrink-0' : 'py-2.5 flex flex-col items-center justify-center gap-1'
           } ${
             value === category
-              ? 'bg-brand-purple/10 border-brand-purple/40 text-brand-purple font-bold shadow-md shadow-brand-purple/5'
+              ? 'bg-brand-purple/10 border-brand-purple/40 text-brand-purple font-bold'
               : 'bg-black/[0.02] border-black/[0.05] hover:bg-black/[0.05]'
           }`}
         >

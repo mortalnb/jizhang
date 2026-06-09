@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Calendar, ChartPie, Loader2, ShieldCheck, Sparkles, TrendingUp, X } from 'lucide-react';
+import { AlertCircle, Calendar, ChartPie, ClipboardList, Loader2, ShieldCheck, TrendingUp, X } from 'lucide-react';
 import { CATEGORY_COLORS, getCategoryEmoji, getCategoryGradient } from '../data/categories';
 import { formatShortDate, monthKey, todayISO } from '../services/date';
 import { buildLocalInsights, generateFinancialInsights, type InsightResult } from '../services/financialInsights';
@@ -101,7 +101,7 @@ export function Dashboard() {
   }, [insightSignature, settings, transactions]);
 
   return (
-    <div className="w-full max-w-md mx-auto px-4 space-y-5 animate-slide-up dashboard-bottom-space">
+    <div className="w-full max-w-md mx-auto px-4 pt-4 space-y-5 animate-slide-up dashboard-bottom-space">
       <section className="flex justify-between items-start">
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-1.5">
@@ -185,9 +185,7 @@ function BudgetCard({
   transactionCount: number;
 }) {
   return (
-    <section className="glass-panel rounded-2xl p-5 relative overflow-hidden shadow-lg shadow-brand-purple/3">
-      <div className="absolute right-[-40px] top-[-40px] w-32 h-32 rounded-full bg-brand-cyan/15 blur-3xl" />
-      <div className="absolute left-[-40px] bottom-[-40px] w-32 h-32 rounded-full bg-brand-purple/15 blur-3xl" />
+    <section className="glass-panel rounded-2xl p-5 relative overflow-hidden">
       <div className="flex flex-col items-center py-4 space-y-4 relative">
         <div className="relative w-40 h-40 flex items-center justify-center">
           <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
@@ -226,14 +224,14 @@ function BudgetCard({
 
 function InsightCard({ result }: { result: InsightResult }) {
   return (
-    <section className="glass-panel rounded-2xl p-5 border border-brand-neon/20 shadow-md shadow-brand-neon/2 space-y-4">
+    <section className="glass-panel rounded-2xl p-5 border border-brand-purple/12 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-bold flex items-center gap-1.5">
-          <Sparkles size={16} className="text-brand-neon" />
+          <ClipboardList size={16} className="text-brand-purple" />
           智能洞察
         </h2>
         <span className="text-[10px] text-dark-muted bg-black/[0.03] border border-black/[0.05] rounded-full px-2 py-0.5 flex items-center gap-1">
-          {result.source === 'model' ? <Sparkles size={10} className="text-brand-purple" /> : <Loader2 size={10} />}
+          {result.source === 'model' ? <ClipboardList size={10} className="text-brand-purple" /> : <Loader2 size={10} />}
           {result.source === 'model' ? '大模型分析' : result.enoughDataForModel ? '本地分析' : '数据积累中'}
         </span>
       </div>
@@ -388,7 +386,7 @@ function CalendarOverview({
               disabled={total === 0}
               className={`aspect-square rounded-xl border text-left p-1.5 transition-all ${
                 active
-                  ? 'bg-brand-purple text-white border-brand-purple shadow-md shadow-brand-purple/20'
+                  ? 'bg-brand-purple text-white border-brand-purple shadow-sm'
                   : total > 0
                     ? 'bg-white/70 border-brand-purple/15 hover:border-brand-purple/40'
                     : 'bg-black/[0.015] border-black/[0.03] text-dark-muted/60'
@@ -409,7 +407,7 @@ function DayDetailSheet({ date, items, onClose, total }: { date: string; items: 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/25 backdrop-blur-[3px] px-5 safe-modal-y" onClick={onClose}>
       <section
-        className="w-full max-w-sm rounded-3xl glass-panel-heavy border border-black/[0.06] p-5 space-y-4 animate-slide-up shadow-2xl shadow-slate-900/10"
+        className="w-full max-w-sm rounded-2xl glass-panel-heavy border border-black/[0.06] p-5 space-y-4 animate-slide-up shadow-xl shadow-slate-900/10"
         onClick={event => event.stopPropagation()}
       >
         <div className="flex items-start justify-between">
@@ -470,7 +468,7 @@ function Bar({ amount, label, max }: { amount: number; label: string; max: numbe
   return (
     <div className="flex flex-col items-center space-y-2 w-14 z-10">
       <span className="text-[10px] text-dark-muted font-mono">¥{amount.toFixed(0)}</span>
-      <div className="w-8 rounded-t-lg bg-gradient-to-t from-brand-purple/60 to-brand-cyan/80 shadow-md shadow-brand-purple/10 transition-all duration-500" style={{ height }} />
+      <div className="w-8 rounded-t-lg bg-brand-purple/70 transition-all duration-500" style={{ height }} />
       <span className="text-[10px] text-dark-muted font-medium pb-1">{label}</span>
     </div>
   );

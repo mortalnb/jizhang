@@ -182,7 +182,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
               onClick={() => setSelectedCategory(category)}
               className={`text-[11px] px-3.5 py-1.5 rounded-full shrink-0 border transition-all active:scale-95 ${
                 selectedCategory === category
-                  ? 'bg-gradient-to-r from-brand-purple to-brand-cyan text-white border-transparent font-bold shadow-md shadow-brand-purple/10'
+                  ? 'bg-brand-purple text-white border-transparent font-bold shadow-sm'
                   : 'bg-black/[0.02] border-black/[0.05] text-dark-muted hover:bg-black/[0.05]'
               }`}
             >
@@ -235,7 +235,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                   </span>
                   <span className="font-mono">日支出 ¥{grouped[date].total.toFixed(2)}</span>
                 </div>
-                <div className="glass-panel rounded-2xl overflow-hidden divide-y divide-black/[0.05]">
+                <div className="glass-panel rounded-2xl overflow-visible divide-y divide-black/[0.05]">
                   {grouped[date].items.map(item => {
                     const expanded = expandedId === item.id;
                     const editing = editingId === item.id && editDraft?.id === item.id;
@@ -310,7 +310,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                                   <span>商品明细</span>
                                   <span>{displayItem.subItems.length} 项</span>
                                 </div>
-                                <div className="rounded-xl border border-black/[0.06] bg-dark-surface divide-y divide-black/[0.05] overflow-hidden">
+                                <div className="rounded-xl border border-black/[0.06] bg-dark-surface divide-y divide-black/[0.05] overflow-visible">
                                   {displayItem.subItems.map((subItem, index) => (
                                     <div key={`${subItem.description}-${index}`} className={`p-2.5 gap-3 ${editing ? 'space-y-2' : 'flex items-start justify-between'}`}>
                                       <div className="min-w-0 flex-1 space-y-1">
@@ -358,9 +358,8 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                                   />
                                 </EditField>
                                 <EditField label="日期">
-                                  <EditInput
+                                  <EditDatePicker
                                     ariaLabel="账单日期"
-                                    type="date"
                                     value={displayItem.date}
                                     onChange={date => setEditDraft({ ...displayItem, date })}
                                   />
@@ -380,7 +379,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                                 <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类" value={`${getCategoryEmoji(item.category)} ${item.category}`} />
                                 {item.paymentMethod && <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={item.paymentMethod} />}
                                 <Detail icon={<Calendar size={14} className="text-brand-blue" />} label="日期" value={item.date} />
-                                <Detail icon={<Tag size={14} className="text-brand-neon" />} label="标签" value={item.tag ?? '无'} />
+                                <Detail icon={<Tag size={14} className="text-brand-purple" />} label="标签" value={item.tag ?? '无'} />
                               </div>
                             )}
                             <div className="flex justify-end gap-2 pt-1 border-t border-black/[0.05]">
@@ -447,8 +446,8 @@ function Detail({ icon, label, value }: { icon: React.ReactNode; label: string; 
 
 function EditField({ children, label }: { children: React.ReactNode; label: string }) {
   return (
-    <label className="bg-dark-surface border border-black/[0.06] rounded-xl p-2 space-y-1 min-w-0">
-      <span className="text-[9px] text-dark-muted block">{label}</span>
+    <label className="bg-dark-surface/80 border border-black/[0.06] rounded-xl p-2.5 space-y-1.5 min-w-0 transition-colors focus-within:border-brand-purple/35 focus-within:bg-white">
+      <span className="text-[9px] text-dark-muted block font-medium">{label}</span>
       {children}
     </label>
   );
@@ -470,12 +469,105 @@ function EditInput({
   return (
     <input
       aria-label={ariaLabel}
-      type={type}
-      placeholder={placeholder}
+      type={type === 'date' ? 'text' : type}
+      inputMode={type === 'date' ? 'numeric' : undefined}
+      placeholder={placeholder ?? (type === 'date' ? 'YYYY-MM-DD' : undefined)}
       value={value}
       onChange={event => onChange(event.target.value)}
-      className="w-full min-w-0 text-[11px] bg-white/70 border border-black/[0.08] rounded-lg px-2 py-1.5 focus:outline-none focus:border-brand-purple"
+      className="w-full min-w-0 h-8 text-[11px] bg-white border border-black/[0.06] rounded-lg px-2.5 text-dark-text shadow-inner shadow-black/[0.015] focus:outline-none focus:border-brand-purple/45 focus:ring-2 focus:ring-brand-purple/10"
     />
+  );
+}
+
+function EditDatePicker({ ariaLabel, onChange, value }: { ariaLabel: string; onChange: (value: string) => void; value: string }) {
+  const [open, setOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState(() => value.slice(0, 7));
+  const today = new Date().toISOString().slice(0, 10);
+  const days = calendarDays(visibleMonth);
+  const monthLabel = `${Number(visibleMonth.slice(5, 7))}月 ${visibleMonth.slice(0, 4)}`;
+
+  const shiftMonth = (offset: number) => {
+    const [year, month] = visibleMonth.split('-').map(Number);
+    const next = new Date(year, month - 1 + offset, 1);
+    setVisibleMonth(toISODate(next).slice(0, 7));
+  };
+
+  return (
+    <div
+      className="relative min-w-0"
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        onClick={() => setOpen(state => !state)}
+        className="w-full min-w-0 h-8 text-[11px] bg-white border border-black/[0.06] rounded-lg px-2.5 text-dark-text shadow-inner shadow-black/[0.015] focus:outline-none focus:border-brand-purple/45 focus:ring-2 focus:ring-brand-purple/10 flex items-center gap-1.5 text-left"
+      >
+        <Calendar size={13} className="text-brand-blue shrink-0" />
+        <span className="truncate font-medium">{value}</span>
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-[calc(100%+0.375rem)] z-50 rounded-xl border border-black/[0.08] bg-white shadow-xl shadow-slate-900/10 p-2.5">
+          <div className="flex items-center justify-between mb-2">
+            <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => shiftMonth(-1)} className="w-7 h-7 rounded-lg bg-dark-surface text-dark-muted hover:text-dark-text">
+              ‹
+            </button>
+            <span className="text-[11px] font-bold text-dark-text">{monthLabel}</span>
+            <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => shiftMonth(1)} className="w-7 h-7 rounded-lg bg-dark-surface text-dark-muted hover:text-dark-text">
+              ›
+            </button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-[9px] text-dark-muted mb-1">
+            {['一', '二', '三', '四', '五', '六', '日'].map(day => (
+              <span key={day} className="py-1">
+                {day}
+              </span>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {days.map(day => {
+              const active = day.date === value;
+              const isToday = day.date === today;
+              return (
+                <button
+                  key={day.date}
+                  type="button"
+                  onMouseDown={event => event.preventDefault()}
+                  onClick={() => {
+                    onChange(day.date);
+                    setOpen(false);
+                  }}
+                  className={`h-7 rounded-lg text-[10px] transition-colors ${
+                    active
+                      ? 'bg-brand-purple text-white font-bold'
+                      : day.inMonth
+                        ? 'text-dark-text hover:bg-dark-surface'
+                        : 'text-dark-muted/45 hover:bg-dark-surface/70'
+                  } ${isToday && !active ? 'border border-brand-purple/25 text-brand-purple' : ''}`}
+                >
+                  {Number(day.date.slice(8, 10))}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onMouseDown={event => event.preventDefault()}
+            onClick={() => {
+              onChange(today);
+              setVisibleMonth(today.slice(0, 7));
+              setOpen(false);
+            }}
+            className="mt-2 w-full h-8 rounded-lg bg-dark-surface text-[11px] font-bold text-brand-purple hover:bg-brand-purple/10"
+          >
+            选择今天
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -490,18 +582,75 @@ function EditSelect({
   onChange: (value: string) => void;
   value: string;
 }) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <select
-      aria-label={ariaLabel}
-      value={value}
-      onChange={event => onChange(event.target.value)}
-      className="w-full min-w-0 text-[11px] bg-white/70 border border-black/[0.08] rounded-lg px-2 py-1.5 focus:outline-none focus:border-brand-purple"
+    <div
+      className="relative min-w-0"
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+      }}
     >
-      {categories.map(category => (
-        <option key={category} value={category}>
-          {category}
-        </option>
-      ))}
-    </select>
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        onClick={() => setOpen(value => !value)}
+        className="w-full min-w-0 h-8 text-[11px] bg-white border border-black/[0.06] rounded-lg pl-2.5 pr-7 text-dark-text shadow-inner shadow-black/[0.015] focus:outline-none focus:border-brand-purple/45 focus:ring-2 focus:ring-brand-purple/10 flex items-center gap-1.5 text-left"
+      >
+        <span className="shrink-0 text-xs">{getCategoryEmoji(value)}</span>
+        <span className="truncate font-medium">{value}</span>
+      </button>
+      <ChevronDown size={13} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-dark-muted" />
+      {open && (
+        <div className="absolute left-0 right-0 top-[calc(100%+0.375rem)] z-50 rounded-xl border border-black/[0.08] bg-white shadow-xl shadow-slate-900/10 overflow-hidden">
+          <div className="max-h-56 overflow-y-auto no-scrollbar p-1">
+            {categories.map(category => {
+              const active = category === value;
+              return (
+                <button
+                  key={category}
+                  type="button"
+                  onMouseDown={event => event.preventDefault()}
+                  onClick={() => {
+                    onChange(category);
+                    setOpen(false);
+                  }}
+                  className={`w-full h-8 rounded-lg px-2.5 text-[11px] flex items-center gap-2 text-left transition-colors ${
+                    active ? 'bg-brand-purple/10 text-brand-purple font-bold' : 'text-dark-text hover:bg-dark-surface'
+                  }`}
+                >
+                  <span className="w-4 text-center shrink-0">{getCategoryEmoji(category)}</span>
+                  <span className="truncate">{category}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
+}
+
+function calendarDays(monthKey: string) {
+  const [year, month] = monthKey.split('-').map(Number);
+  const first = new Date(year, month - 1, 1);
+  const start = new Date(first);
+  const weekday = first.getDay() === 0 ? 7 : first.getDay();
+  start.setDate(first.getDate() - weekday + 1);
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return {
+      date: toISODate(date),
+      inMonth: date.getMonth() === month - 1,
+    };
+  });
+}
+
+function toISODate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
