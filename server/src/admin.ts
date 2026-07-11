@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { prisma } from './db.js';
 import { hashPassword } from './security.js';
 import { startOfMonth, startOfToday } from './time.js';
+import { stdin, stdout } from 'node:process';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -19,6 +20,26 @@ const positional = (index: number) => args[index + 1];
 const requireValue = (value: string | undefined, label: string) => {
   if (!value) throw new Error(`Missing ${label}`);
   return value;
+};
+
+const readHiddenPassword = async () => {
+  if (!stdin.isTTY) throw new Error('set-password-stdin requires an interactive terminal');
+  stdout.write('New password: ');
+  stdin.setRawMode(true);
+  stdin.resume();
+  return await new Promise<string>((resolve, reject) => {
+    let value = '';
+    const onData = (chunk: Buffer) => {
+      const char = chunk.toString('utf8');
+      if (char === '\r' || char === '\n') {
+        stdin.setRawMode(false); stdin.pause(); stdin.off('data', onData); stdout.write('\n'); resolve(value); return;
+      }
+      if (char === '\u0003') { stdin.setRawMode(false); stdin.pause(); stdin.off('data', onData); reject(new Error('Password entry cancelled')); return; }
+      if (char === '\u007f') { value = value.slice(0, -1); return; }
+      value += char;
+    };
+    stdin.on('data', onData);
+  });
 };
 
 const main = async () => {
@@ -48,6 +69,15 @@ const main = async () => {
   if (command === 'set-password') {
     const username = requireValue(positional(0), 'username');
     const password = requireValue(option('password') || positional(1), 'password');
+    await prisma.user.update({ where: { username }, data: { passwordHash: await hashPassword(password) } });
+    console.log(`updated password for ${username}`);
+    return;
+  }
+
+  if (command === 'set-password-stdin') {
+    const username = requireValue(positional(0), 'username');
+    const password = await readHiddenPassword();
+    if (password.length < 12) throw new Error('Password must be at least 12 characters');
     await prisma.user.update({ where: { username }, data: { passwordHash: await hashPassword(password) } });
     console.log(`updated password for ${username}`);
     return;
@@ -100,7 +130,7 @@ const main = async () => {
   }
 
   console.error(`Unknown command: ${command ?? '(none)'}`);
-  console.error('Commands: create-user, set-password, grant-model, unbind-device, disable-user, usage');
+  console.error('Commands: create-user, set-password, set-password-stdin, grant-model, unbind-device, disable-user, usage');
   process.exitCode = 1;
 };
 
