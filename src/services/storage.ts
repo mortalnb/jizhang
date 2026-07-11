@@ -54,7 +54,8 @@ const normalizeSettings = (settings: AppSettings): AppSettings => ({
   ...settings,
   aiMode: settings.aiMode === 'cloud' ? 'cloud' : 'custom',
   baseUrl: LEGACY_MODEL_PATTERN.test(settings.baseUrl) ? DEFAULT_SETTINGS.baseUrl : settings.baseUrl || DEFAULT_SETTINGS.baseUrl,
-  cloudBaseUrl: settings.cloudBaseUrl?.trim() || DEFAULT_SETTINGS.cloudBaseUrl,
+  // Cloud proxy is a product endpoint, not a user-editable model setting.
+  cloudBaseUrl: DEFAULT_SETTINGS.cloudBaseUrl,
   model: LEGACY_MODEL_PATTERN.test(settings.model) ? DEFAULT_SETTINGS.model : settings.model || DEFAULT_SETTINGS.model,
   categories: migrateCategories(settings.categories),
 });

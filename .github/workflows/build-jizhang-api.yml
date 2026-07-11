@@ -3,6 +3,9 @@ name: Build jizhang API image
 on:
   push:
     branches: ['codex/**']
+    paths:
+      - 'server/**'
+      - '.github/workflows/build-jizhang-api.yml'
   workflow_dispatch:
 
 permissions:

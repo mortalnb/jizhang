@@ -138,7 +138,7 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
     setCloudLoading(true);
     setCloudDiagnostic(null);
     const baseUrl = settings.cloudBaseUrl.replace(/\/$/, '');
-    const lines = [`online: ${navigator.onLine ? 'yes' : 'no'}`, `base: ${baseUrl}`];
+    const lines = [`网络：${navigator.onLine ? '可用' : '不可用'}`];
 
     const probe = async (label: string, path: string, init?: RequestInit) => {
       const controller = new AbortController();
@@ -149,24 +149,22 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
           ...init,
           signal: controller.signal,
         });
-        lines.push(`${label}: HTTP ${response.status} ${Math.round(performance.now() - started)}ms`);
-      } catch (error) {
-        const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-        lines.push(`${label}: ${message}`);
+        lines.push(`${label}：HTTP ${response.status} · ${Math.round(performance.now() - started)}ms`);
+      } catch {
+        lines.push(`${label}：不可用`);
       } finally {
         window.clearTimeout(timer);
       }
     };
 
-    await probe('health', '/health');
-    await probe('version', '/api/version');
-    await probe('login preflight', '/api/auth/login', {
-      method: 'OPTIONS',
-      headers: {
-        'Access-Control-Request-Headers': 'content-type',
-        'Access-Control-Request-Method': 'POST',
-      },
-    });
+    await probe('服务健康', '/health');
+    await probe('服务版本', '/api/version');
+    try {
+      await cloudApi.me(settings);
+      lines.push('登录状态：已认证');
+    } catch {
+      lines.push('登录状态：需要重新登录');
+    }
 
     setCloudDiagnostic(lines.join('\n'));
     setCloudLoading(false);
@@ -326,7 +324,6 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
             </div>
           )}
 
-          {modelPanel === 'cloud' && <IconInput icon={<Globe size={14} className="text-dark-muted" />} label="云端服务地址" value={settings.cloudBaseUrl} onChange={cloudBaseUrl => setSettings({ ...settings, cloudBaseUrl })} />}
 
           <button
             type="button"
