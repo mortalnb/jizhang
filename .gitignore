@@ -21,6 +21,7 @@ key.txt
 *.local
 .env
 .env.*
+!.env.production
 !.env.example
 
 # Android / Capacitor generated output

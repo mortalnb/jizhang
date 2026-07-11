@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: jizhang
       POSTGRES_USER: jizhang
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jizhang_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - postgres-data:/var/lib/postgresql/data
 

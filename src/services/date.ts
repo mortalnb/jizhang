@@ -1,4 +1,9 @@
-export const todayISO = () => new Date().toISOString().slice(0, 10);
+const chinaParts = (date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+
+export const todayISO = () => {
+  const parts = Object.fromEntries(chinaParts().map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
 
 export const monthKey = (date: string) => date.slice(0, 7);
 

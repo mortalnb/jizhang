@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from './auth.js';
+import { withModelSlot } from './concurrency.js';
+import { AppError } from './errors.js';
 import { callMimoChat, extractJsonObject, extractModelContent } from './mimo.js';
 import { assertModelAccess, recordUsage } from './quota.js';
 import type { AuthenticatedRequest } from './types.js';
@@ -32,9 +34,10 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     const input = parseTextSchema.parse(request.body);
     const endpoint = 'parse-transaction';
     await assertModelAccess(auth.userId, input.model, endpoint);
+    const startedAt = Date.now();
 
     try {
-      const payload = await callMimoChat({
+      const payload = await withModelSlot('text', () => callMimoChat({
         model: input.model,
         temperature: 0.1,
         max_completion_tokens: 2048,
@@ -54,12 +57,12 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           },
           { role: 'user', content: input.text },
         ],
-      });
+      }));
       const parsed = JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
-      await recordUsage({ endpoint, model: input.model, success: true, userId: auth.userId });
+      await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result: parsed };
     } catch (error) {
-      await recordUsage({ endpoint, errorCode: error instanceof Error ? error.message.slice(0, 80) : 'unknown', model: input.model, success: false, userId: auth.userId });
+      await recordUsage({ durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
       throw error;
     }
   });
@@ -69,9 +72,10 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     const input = imageSchema.parse(request.body);
     const endpoint = 'recognize-bill-image';
     await assertModelAccess(auth.userId, input.model, endpoint);
+    const startedAt = Date.now();
 
     try {
-      const payload = await callMimoChat({
+      const payload = await withModelSlot('image', () => callMimoChat({
         model: input.model,
         temperature: 0.1,
         top_p: 0.9,
@@ -98,12 +102,12 @@ export const registerModelRoutes = (app: FastifyInstance) => {
             ],
           },
         ],
-      });
+      }));
       const parsed = JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
-      await recordUsage({ endpoint, model: input.model, success: true, userId: auth.userId });
+      await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result: parsed };
     } catch (error) {
-      await recordUsage({ endpoint, errorCode: error instanceof Error ? error.message.slice(0, 80) : 'unknown', model: input.model, success: false, userId: auth.userId });
+      await recordUsage({ durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
       throw error;
     }
   });
@@ -113,10 +117,11 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     const input = capabilitySchema.parse(request.body);
     const endpoint = 'test-capability';
     await assertModelAccess(auth.userId, input.model, endpoint);
+    const startedAt = Date.now();
     const transparentPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
     try {
-      const payload = await callMimoChat({
+      const payload = await withModelSlot('text', () => callMimoChat({
         model: input.model,
         temperature: 0.1,
         max_completion_tokens: 1024,
@@ -131,12 +136,12 @@ export const registerModelRoutes = (app: FastifyInstance) => {
             ],
           },
         ],
-      });
+      }));
       const parsed = JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
-      await recordUsage({ endpoint, model: input.model, success: true, userId: auth.userId });
+      await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result: parsed };
     } catch (error) {
-      await recordUsage({ endpoint, errorCode: error instanceof Error ? error.message.slice(0, 80) : 'unknown', model: input.model, success: false, userId: auth.userId });
+      await recordUsage({ durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
       throw error;
     }
   });

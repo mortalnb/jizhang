@@ -12,6 +12,7 @@ const loginSchema = z.object({
   password: z.string().min(1).max(200),
   username: z.string().min(1).max(80),
 });
+const refreshSchema = z.object({ deviceId: z.string().min(8).max(128), refreshToken: z.string().min(20).max(256) });
 
 export const requireAuth = async (request: FastifyRequest) => {
   const payload = await request.jwtVerify<JwtPayload>();
@@ -75,6 +76,22 @@ export const registerAuthRoutes = (app: FastifyInstance) => {
       user: serializeUser(user),
       entitlement: serializeEntitlement(user.entitlement),
     };
+  });
+
+  app.post('/api/auth/refresh', async (request, reply) => {
+    const input = refreshSchema.parse(request.body);
+    const oldHash = hashToken(input.refreshToken);
+    const result = await prisma.$transaction(async tx => {
+      const session = await tx.authSession.findFirst({ where: { deviceId: input.deviceId, refreshTokenHash: oldHash }, include: { user: { include: { deviceBinding: true } } } });
+      if (!session || session.expiresAt <= new Date() || !session.user.isEnabled || session.user.deviceBinding?.deviceId !== input.deviceId) throw new AppError(401, 'invalid_session', 'Session is invalid or expired');
+      const refreshToken = randomToken();
+      const updated = await tx.authSession.updateMany({ where: { id: session.id, refreshTokenHash: oldHash }, data: { refreshTokenHash: hashToken(refreshToken), expiresAt: addDays(30) } });
+      if (updated.count !== 1) throw new AppError(401, 'invalid_session', 'Session is invalid or expired');
+      return { session, refreshToken };
+    });
+    const { session, refreshToken } = result;
+    const accessToken = await reply.jwtSign({ deviceId: session.deviceId, sessionId: session.id, userId: session.userId, username: session.user.username });
+    return { accessToken, refreshToken };
   });
 
   app.post('/api/auth/logout', { preHandler: requireAuth }, async (request, reply: FastifyReply) => {

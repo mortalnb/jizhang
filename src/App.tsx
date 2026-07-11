@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { BookText, ListCollapse, Plus, Settings as SettingsIcon, TrendingUp } from 'lucide-react';
+import { AlertTriangle, BookText, Download, ListCollapse, Plus, Settings as SettingsIcon, TrendingUp } from 'lucide-react';
+import { parseBackup } from './services/backup';
+import { storage } from './services/storage';
 import { AIInput } from './components/AIInput';
 import { Dashboard } from './components/Dashboard';
 import { Settings } from './components/Settings';
@@ -10,6 +12,11 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = () => setRefreshKey(key => key + 1);
+  const recovery = storage.getRecoveryState();
+
+  if (recovery) {
+    return <RecoveryScreen reason={recovery.reason} />;
+  }
 
   return (
     <div className="app-shell h-dvh bg-dark-bg text-dark-text radial-bg-glow flex flex-col items-center relative overflow-hidden select-none">
@@ -21,7 +28,7 @@ export default function App() {
           <span className="text-base font-semibold tracking-normal">记账</span>
         </div>
         <span className="text-[10px] text-dark-muted font-semibold bg-white/70 border border-black/[0.06] px-2.5 py-1 rounded-full uppercase tracking-wider font-mono">
-          v1.4.3
+          v1.4.4
         </span>
       </header>
 
@@ -55,6 +62,38 @@ export default function App() {
         </button>
         <NavButton active={activeTab === 'settings'} label="设置" icon={SettingsIcon} onClick={() => setActiveTab('settings')} />
       </nav>
+    </div>
+  );
+}
+
+function RecoveryScreen({ reason }: { reason: string }) {
+  const exportRaw = () => {
+    const blob = new Blob([storage.getRecoveryRaw()], { type: 'application/json;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `智能记账-损坏数据快照-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+  const restore = async (file?: File) => {
+    if (!file) return;
+    try {
+      storage.restoreBackup(parseBackup(await file.text()), 'replace');
+      window.location.reload();
+    } catch (error) {
+      window.alert(error instanceof Error ? `恢复失败：${error.message}` : '恢复失败，请选择有效备份。');
+    }
+  };
+  return (
+    <div className="app-shell min-h-dvh bg-dark-bg text-dark-text p-5 flex items-center justify-center">
+      <section className="glass-panel rounded-2xl p-5 max-w-md space-y-4">
+        <AlertTriangle className="text-brand-rose" size={28} />
+        <h1 className="text-lg font-bold">账本进入只读恢复模式</h1>
+        <p className="text-sm text-dark-muted leading-relaxed">{reason}</p>
+        <p className="text-xs text-dark-muted leading-relaxed">为避免继续记账覆盖原始数据，应用已停止读取和写入账本。请先导出原始快照，再通过新版“导入账本”恢复最近一次有效备份。</p>
+        <button type="button" onClick={exportRaw} className="w-full py-3 rounded-xl bg-brand-purple text-white font-bold flex items-center justify-center gap-2"><Download size={16} />导出原始恢复快照</button>
+        <label className="block w-full py-3 rounded-xl border border-brand-purple/30 text-center text-brand-purple font-bold cursor-pointer">从有效账本备份恢复<input type="file" accept="application/json,.json" className="hidden" onChange={event => void restore(event.target.files?.[0])} /></label>
+      </section>
     </div>
   );
 }

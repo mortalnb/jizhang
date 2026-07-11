@@ -8,7 +8,7 @@ import { sendError } from './errors.js';
 import { registerModelRoutes } from './modelRoutes.js';
 import { prisma } from './db.js';
 
-const app = Fastify({ logger: true, bodyLimit: 7_500_000 });
+const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie', 'req.body', 'res.headers.set-cookie', 'err'] }, bodyLimit: 7_500_000 });
 
 await app.register(cors, {
   origin(origin, callback) {
@@ -19,7 +19,7 @@ await app.register(cors, {
 await app.register(jwt, { secret: config.jwtSecret, sign: { expiresIn: '15m' } });
 await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
 
-app.setErrorHandler((error, _request, reply) => sendError(reply, error));
+app.setErrorHandler((error, request, reply) => sendError(reply, error, request.id));
 
 app.get('/health', async () => ({ ok: true }));
 app.get('/api/version', async () => ({ name: 'jizhang-server', version: '0.1.0' }));

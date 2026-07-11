@@ -67,6 +67,7 @@ model UsageEvent {
   costUnits Int      @default(1) @map("cost_units")
   success   Boolean
   errorCode String?  @map("error_code")
+  durationMs Int?    @map("duration_ms")
   createdAt DateTime @default(now()) @map("created_at")
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

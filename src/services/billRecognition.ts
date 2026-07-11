@@ -861,23 +861,13 @@ const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], s
   };
 };
 
-const recognizeWithMimoVision = async (file: File, categories: string[], settings?: Pick<AppSettings, 'apiKey' | 'baseUrl' | 'cloudBaseUrl' | 'model'>) => {
+const recognizeWithMimoVision = async (file: File, categories: string[], settings?: Pick<AppSettings, 'aiMode' | 'apiKey' | 'baseUrl' | 'cloudBaseUrl' | 'model'>) => {
   const imageUrl = await imageToDataUrlForVision(file);
-  if (settings && storage.getCloudSession()?.accessToken) {
-    try {
-      const parsed = await cloudApi.recognizeBillImage(settings as Pick<AppSettings, 'cloudBaseUrl' | 'model'>, imageUrl, categories);
-      const source = sourceFromVision(parsed);
-      return {
-        mode: 'vision',
-        source,
-        sourceLabel: parsed.sourceLabel || SOURCE_LABELS[source],
-        confidence: 0.93,
-        rawText: JSON.stringify(parsed, null, 2),
-        result: normalizeVisionResult(parsed, categories, source),
-      } satisfies RecognizedBill;
-    } catch (error) {
-      console.warn('Cloud vision recognition failed, falling back to configured/local recognition.', error);
-    }
+  if (settings?.aiMode === 'cloud') {
+    if (!storage.getCloudSession()?.accessToken) throw new Error('云端模式未登录，请先登录云端服务或切换到自填模型');
+    const parsed = await cloudApi.recognizeBillImage(settings as Pick<AppSettings, 'cloudBaseUrl' | 'model'>, imageUrl, categories);
+    const source = sourceFromVision(parsed);
+    return { mode: 'vision', source, sourceLabel: parsed.sourceLabel || SOURCE_LABELS[source], confidence: 0.93, rawText: JSON.stringify(parsed, null, 2), result: normalizeVisionResult(parsed, categories, source) } satisfies RecognizedBill;
   }
 
   const apiKey = settings?.apiKey?.trim();
@@ -950,8 +940,10 @@ const recognizeWithMimoVision = async (file: File, categories: string[], setting
   }
 };
 
-export const recognizeBillImage = async (file: File, categories: string[], settings?: Pick<AppSettings, 'apiKey' | 'baseUrl' | 'cloudBaseUrl' | 'model'>): Promise<RecognizedBill> => {
+export const recognizeBillImage = async (file: File, categories: string[], settings?: Pick<AppSettings, 'aiMode' | 'apiKey' | 'baseUrl' | 'cloudBaseUrl' | 'model'>): Promise<RecognizedBill> => {
   const fixture = await guessFixture(file);
+
+  if (settings?.aiMode === 'cloud') return (await recognizeWithMimoVision(file, categories, settings))!;
 
   try {
     const visionResult = await recognizeWithMimoVision(file, categories, settings);

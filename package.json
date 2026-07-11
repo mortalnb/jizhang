@@ -1,7 +1,7 @@
 {
   "name": "test2",
   "private": true,
-  "version": "1.4.3",
+  "version": "1.4.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,6 +15,8 @@
   "dependencies": {
     "@capacitor/android": "^8.3.4",
     "@capacitor/core": "^8.3.4",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/share": "^8.0.1",
     "@pantrist/capacitor-plugin-ml-kit-text-recognition": "^8.0.0",
     "lucide-react": "^1.16.0",
     "react": "^19.2.6",

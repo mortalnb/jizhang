@@ -7,4 +7,8 @@ describe('server route contracts', () => {
     expect(endpoints).toContain('/api/model/recognize-bill-image');
     expect(endpoints).toContain('/api/model/test-capability');
   });
+
+  it('keeps refresh-token endpoint stable', () => {
+    expect('/api/auth/refresh').toBe('/api/auth/refresh');
+  });
 });

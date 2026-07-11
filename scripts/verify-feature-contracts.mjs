@@ -27,11 +27,14 @@ for (const example of [
 assert.match(aiParser, /AA.*splitItems|splitItems.*AA/s, 'AI prompt should explain AA splitItems behavior');
 assert.match(transactionList, /编辑/, 'transaction details should expose an edit action');
 assert.match(transactionList, /overflow-y-auto/, 'long transaction details should be scrollable');
-assert.match(storage, /if \(!raw\)[\s\S]*return \[\]/, 'new users should start with an empty transaction list');
-assert.match(storage, /const migrated = migrateTransactions\(parsed\)/, 'existing transactions should be migrated instead of replaced');
-assert.equal(packageJson.version, '1.4.1', 'package version should be 1.4.1');
-assert.match(app, /v1\.4\.1/, 'app header should show v1.4.1');
-assert.match(androidBuild, /versionCode 12/, 'Android versionCode should be 12');
-assert.match(androidBuild, /versionName "1\.4\.1"/, 'Android versionName should be 1.4.1');
+assert.match(storage, /rawTransactions \? JSON\.parse\(rawTransactions\) : \[\]/, 'new users should start with an empty transaction list');
+assert.match(storage, /const migrated = migrateTransactions\(transactions\)/, 'existing transactions should be migrated instead of replaced');
+assert.equal(packageJson.version, '1.4.4', 'package version should be 1.4.4');
+assert.match(app, /v1\.4\.4/, 'app header should show v1.4.4');
+assert.match(androidBuild, /versionCode 15/, 'Android versionCode should be 15');
+assert.match(androidBuild, /versionName "1\.4\.4"/, 'Android versionName should be 1.4.4');
+assert.match(storage, /CURRENT_SCHEMA_VERSION = 3/, 'storage schema should be versioned');
+assert.match(storage, /getRecoveryState/, 'storage should expose read-only recovery state');
+assert.match(storage, /aiMode: 'custom'/, 'self-managed key should remain the safe default mode');
 
 console.log('Feature contracts verified.');

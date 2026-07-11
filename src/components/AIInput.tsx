@@ -23,6 +23,8 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   const [loading, setLoading] = useState(false);
   const [loadingMode, setLoadingMode] = useState<'image' | 'text'>('text');
   const [success, setSuccess] = useState(false);
+  const [requestRoute, setRequestRoute] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const normalizeCategory = (category: string, text = '') => {
     if (categories.includes(category)) return category;
@@ -55,10 +57,14 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     setLoading(true);
     setSuccess(false);
     setParsedCard(null);
+    setError(null);
     try {
       setRecognizedBill(null);
       const result = await aiParser.parse(text, settings);
       setParsedCard(normalizeParsedCategories({ ...result, paymentMethod: '' }));
+      setRequestRoute(settings.aiMode === 'cloud' ? '云端代理' : settings.apiKey.trim() ? '自填 Key' : '本地规则');
+    } catch (error) {
+      setError(error instanceof Error ? `解析失败：${error.message}` : '解析失败，请重试或切换智能服务。');
     } finally {
       setLoading(false);
     }
@@ -70,11 +76,15 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     setSuccess(false);
     setParsedCard(null);
     setRecognizedBill(null);
+    setError(null);
     try {
       const bill = await recognizeBillImage(file, categories, settings);
       const result = normalizeParsedCategories({ ...bill.result, paymentMethod: '' });
       setRecognizedBill({ ...bill, result });
       setParsedCard(result);
+      setRequestRoute(settings.aiMode === 'cloud' ? '云端代理' : bill.mode === 'vision' ? '自填 Key' : '本地 OCR/规则');
+    } catch (error) {
+      setError(error instanceof Error ? `截图识别失败：${error.message}` : '截图识别失败，请重试或切换智能服务。');
     } finally {
       setLoading(false);
     }
@@ -164,6 +174,9 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
         </h1>
         <p className="text-xs text-dark-muted">输入一句话或导入账单截图，确认后保存到本地账本。</p>
       </section>
+
+      {error && <div className="rounded-xl border border-brand-rose/30 bg-brand-rose/5 px-3 py-2 text-xs text-brand-rose">{error}</div>}
+      {requestRoute && <div className="rounded-xl border border-brand-purple/20 bg-brand-purple/5 px-3 py-2 text-xs text-brand-purple">本次请求路径：{requestRoute}</div>}
 
       {!parsedCard && !loading && !success && (
         <section className="glass-panel rounded-2xl p-4 space-y-4">

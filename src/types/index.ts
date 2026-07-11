@@ -16,6 +16,7 @@ export interface Transaction {
 }
 
 export interface AppSettings {
+  aiMode: 'cloud' | 'custom';
   apiKey: string;
   baseUrl: string;
   cloudBaseUrl: string;

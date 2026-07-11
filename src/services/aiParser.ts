@@ -147,13 +147,10 @@ const normalizeRemoteResult = (parsed: Partial<ParsedTransaction>, text: string,
 export const aiParser = {
   async parse(text: string, settings: AppSettings): Promise<ParsedTransaction> {
     const categories = settings.categories.length ? settings.categories : ['其他'];
-    if (storage.getCloudSession()?.accessToken) {
-      try {
-        const cloudResult = await cloudApi.parseTransaction(settings, text, categories);
-        return normalizeRemoteResult(cloudResult, text, categories);
-      } catch (error) {
-        console.warn('Cloud AI parse failed, falling back to configured/local parser.', error);
-      }
+    if (settings.aiMode === 'cloud') {
+      if (!storage.getCloudSession()?.accessToken) throw new Error('云端模式未登录，请先登录云端服务或切换到自填模型');
+      const cloudResult = await cloudApi.parseTransaction(settings, text, categories);
+      return normalizeRemoteResult(cloudResult, text, categories);
     }
 
     const useDevProxy = import.meta.env.DEV;

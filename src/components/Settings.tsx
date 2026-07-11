@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle, Cpu, Globe, Key, Plus, RotateCcw, Save, ServerCog, Tag, Wallet, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Cpu, Download, Globe, Key, Plus, RotateCcw, Save, ServerCog, Tag, Upload, Wallet, X } from 'lucide-react';
+import { exportBackup, parseBackup } from '../services/backup';
 import { getCategoryEmoji } from '../data/categories';
 import { cloudApi } from '../services/cloudApi';
 import { storage } from '../services/storage';
@@ -16,11 +17,12 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
   const [cloudPassword, setCloudPassword] = useState('');
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudDiagnostic, setCloudDiagnostic] = useState<string | null>(null);
-  const [modelPanel, setModelPanel] = useState<'cloud' | 'custom'>('cloud');
+  const [modelPanel, setModelPanel] = useState<'cloud' | 'custom'>(() => storage.getSettings().aiMode);
   const [newCategory, setNewCategory] = useState('');
   const [testingModel, setTestingModel] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'warn' } | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
 
   const notify = (message: string, type: 'success' | 'warn' = 'success') => {
     setToast({ message, type });
@@ -47,7 +49,7 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
     try {
-      if (cloudSession?.accessToken) {
+      if (modelPanel === 'cloud' && cloudSession?.accessToken) {
         const parsed = await cloudApi.testCapability(settings);
         setTestResult(`文字 ${parsed.text ? '可用' : '异常'} · JSON ${parsed.json ? '可用' : '异常'} · 图片 ${parsed.vision ? '可用' : '可能不支持'}`);
         notify('云端模型能力测试完成');
@@ -201,6 +203,31 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
     onSettingsSaved();
   };
 
+  const exportLedger = async () => {
+    setBackupBusy(true);
+    try {
+      await exportBackup(storage.createBackup());
+      notify('账本备份已生成；请保存到可恢复的位置。');
+    } catch (error) {
+      notify(error instanceof Error ? `导出失败：${error.message}` : '导出失败', 'warn');
+    } finally { setBackupBusy(false); }
+  };
+
+  const importLedger = async (file?: File) => {
+    if (!file) return;
+    setBackupBusy(true);
+    try {
+      const backup = parseBackup(await file.text());
+      const mode = window.confirm(`备份含 ${backup.payload.transactions.length} 笔账目。确定覆盖恢复吗？选择“取消”将合并导入。`) ? 'replace' : 'merge';
+      const count = storage.restoreBackup(backup, mode);
+      setSettings(storage.getSettings());
+      notify(`${mode === 'replace' ? '已恢复' : '已合并'} ${count} 笔账目。`);
+      onSettingsSaved();
+    } catch (error) {
+      notify(error instanceof Error ? `导入失败：${error.message}` : '导入失败', 'warn');
+    } finally { setBackupBusy(false); }
+  };
+
   return (
     <div className="w-full max-w-md mx-auto p-4 space-y-6 animate-slide-up pb-24">
       {toast && (
@@ -227,14 +254,14 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
           <div className="grid grid-cols-2 gap-1 rounded-xl bg-black/[0.03] border border-black/[0.06] p-1">
             <button
               type="button"
-              onClick={() => setModelPanel('cloud')}
+              onClick={() => { setModelPanel('cloud'); setSettings(current => ({ ...current, aiMode: 'cloud' })); }}
               className={`h-9 rounded-lg text-xs font-bold transition-all ${modelPanel === 'cloud' ? 'bg-white text-brand-purple shadow-sm' : 'text-dark-muted hover:text-dark-text'}`}
             >
               云端服务
             </button>
             <button
               type="button"
-              onClick={() => setModelPanel('custom')}
+              onClick={() => { setModelPanel('custom'); setSettings(current => ({ ...current, aiMode: 'custom' })); }}
               className={`h-9 rounded-lg text-xs font-bold transition-all ${modelPanel === 'custom' ? 'bg-white text-brand-purple shadow-sm' : 'text-dark-muted hover:text-dark-text'}`}
             >
               自填模型
@@ -298,6 +325,8 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
               />
             </div>
           )}
+
+          {modelPanel === 'cloud' && <IconInput icon={<Globe size={14} className="text-dark-muted" />} label="云端服务地址" value={settings.cloudBaseUrl} onChange={cloudBaseUrl => setSettings({ ...settings, cloudBaseUrl })} />}
 
           <button
             type="button"
@@ -364,6 +393,12 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
             onChange={monthlyBudget => setSettings({ ...settings, monthlyBudget: Number(monthlyBudget) || 0 })}
             hint="仪表盘会根据预算展示进度和预警。"
           />
+        </Panel>
+
+        <Panel icon={<Download size={18} className="text-brand-purple" />} title="账本备份与恢复">
+          <p className="text-[11px] text-dark-muted leading-relaxed">导出包含账单、拆单、分类和预算，不包含 API Key、云端 token 或设备标识。应用会在写入前创建恢复快照；仍建议定期导出到手机文档目录。</p>
+          <button type="button" onClick={exportLedger} disabled={backupBusy} className="w-full py-2.5 rounded-xl bg-brand-purple text-white text-xs font-bold disabled:opacity-50 flex items-center justify-center gap-2"><Download size={14} />{backupBusy ? '正在处理备份' : '导出账本备份'}</button>
+          <label className="w-full py-2.5 rounded-xl bg-black/[0.02] border border-black/[0.08] text-xs font-bold text-brand-purple flex items-center justify-center gap-2 cursor-pointer"><Upload size={14} />导入账本备份<input type="file" accept="application/json,.json" className="hidden" onChange={event => void importLedger(event.target.files?.[0])} /></label>
         </Panel>
 
         <div className="flex flex-col gap-3">

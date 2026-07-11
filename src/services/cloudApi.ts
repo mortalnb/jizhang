@@ -27,7 +27,7 @@ export interface CloudVisionResult {
 
 const cloudUrl = (settings: Pick<AppSettings, 'cloudBaseUrl'>, path: string) => `${settings.cloudBaseUrl.replace(/\/$/, '')}${path}`;
 
-const cloudFetch = async <T>(settings: Pick<AppSettings, 'cloudBaseUrl'>, path: string, body?: unknown): Promise<T> => {
+const cloudFetch = async <T>(settings: Pick<AppSettings, 'cloudBaseUrl'>, path: string, body?: unknown, retried = false): Promise<T> => {
   const session = storage.getCloudSession();
   if (!session?.accessToken) throw new Error('Cloud session is not available');
   const response = await fetch(cloudUrl(settings, path), {
@@ -38,6 +38,11 @@ const cloudFetch = async <T>(settings: Pick<AppSettings, 'cloudBaseUrl'>, path: 
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (response.status === 401 && !retried && session.refreshToken) {
+    const refreshed = await cloudApi.refresh(settings, session.refreshToken);
+    storage.saveCloudSession({ ...session, ...refreshed });
+    return cloudFetch(settings, path, body, true);
+  }
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     const message = payload?.error?.message || `Cloud API HTTP ${response.status}`;
@@ -70,6 +75,15 @@ export const cloudApi = {
   async logout(settings: Pick<AppSettings, 'cloudBaseUrl'>) {
     await cloudFetch(settings, '/api/auth/logout', {}).catch(() => undefined);
     storage.saveCloudSession(null);
+  },
+
+  async refresh(settings: Pick<AppSettings, 'cloudBaseUrl'>, refreshToken: string) {
+    const response = await fetch(cloudUrl(settings, '/api/auth/refresh'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: storage.getDeviceId(), refreshToken }),
+    });
+    if (!response.ok) throw new Error('云端会话已失效，请重新登录');
+    return (await response.json()) as Pick<CloudSession, 'accessToken' | 'refreshToken'>;
   },
 
   me(settings: Pick<AppSettings, 'cloudBaseUrl'>) {
