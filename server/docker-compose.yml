@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    mem_limit: 192m
+    cpus: 0.25
     environment:
       POSTGRES_DB: jizhang
       POSTGRES_USER: jizhang
@@ -12,6 +14,8 @@ services:
   api:
     image: ${JIZHANG_API_IMAGE:-ghcr.io/mortalnb/jizhang-api:v1.4.4-cloud}
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
     depends_on:
       - postgres
     env_file:
