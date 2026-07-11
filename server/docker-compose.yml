@@ -10,7 +10,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   api:
-    build: .
+    image: ${JIZHANG_API_IMAGE:-ghcr.io/mortalnb/jizhang-api:v1.4.4-cloud}
     restart: unless-stopped
     depends_on:
       - postgres
