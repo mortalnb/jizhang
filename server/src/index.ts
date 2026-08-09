@@ -6,9 +6,10 @@ import { config } from './config.js';
 import { registerAuthRoutes } from './auth.js';
 import { sendError } from './errors.js';
 import { registerModelRoutes } from './modelRoutes.js';
+import { registerLedgerRoutes } from './ledgerRoutes.js';
 import { prisma } from './db.js';
 
-const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie', 'req.body', 'res.headers.set-cookie', 'err'] }, bodyLimit: 7_500_000 });
+const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie', 'req.body', 'res.headers.set-cookie', 'err'] }, bodyLimit: 14_000_000 });
 
 await app.register(cors, {
   origin(origin, callback) {
@@ -22,10 +23,16 @@ await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
 app.setErrorHandler((error, request, reply) => sendError(reply, error, request.id));
 
 app.get('/health', async () => ({ ok: true }));
-app.get('/api/version', async () => ({ name: 'jizhang-server', version: '0.1.0' }));
+app.get('/api/version', async () => ({
+  name: 'jizhang-server',
+  version: process.env.APP_VERSION || '0.2.0-rc.1',
+  gitSha: process.env.GIT_SHA || 'development',
+  capabilities: ['batch-parse', 'bill-grouping', 'mimo-v2.5-asr', 'ledger-sync'],
+}));
 
 registerAuthRoutes(app);
 registerModelRoutes(app);
+registerLedgerRoutes(app);
 
 const shutdown = async () => {
   await app.close();

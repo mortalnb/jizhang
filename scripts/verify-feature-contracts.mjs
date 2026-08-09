@@ -29,12 +29,15 @@ assert.match(transactionList, /编辑/, 'transaction details should expose an ed
 assert.match(transactionList, /overflow-y-auto/, 'long transaction details should be scrollable');
 assert.match(storage, /rawTransactions \? JSON\.parse\(rawTransactions\) : \[\]/, 'new users should start with an empty transaction list');
 assert.match(storage, /const migrated = migrateTransactions\(transactions\)/, 'existing transactions should be migrated instead of replaced');
-assert.equal(packageJson.version, '1.4.4', 'package version should be 1.4.4');
-assert.match(app, /v1\.4\.4/, 'app header should show v1.4.4');
-assert.match(androidBuild, /versionCode 15/, 'Android versionCode should be 15');
-assert.match(androidBuild, /versionName "1\.4\.4"/, 'Android versionName should be 1.4.4');
-assert.match(storage, /CURRENT_SCHEMA_VERSION = 3/, 'storage schema should be versioned');
+assert.equal(packageJson.version, '1.5.0-rc.1', 'package version should be the RC version');
+assert.match(app, /v1\.5\.0-rc\.1/, 'app header should show the RC version');
+assert.match(androidBuild, /versionCode 16/, 'Android versionCode should be 16');
+assert.match(androidBuild, /versionName "1\.5\.0-rc\.1"/, 'Android versionName should be the RC version');
+assert.match(storage, /CURRENT_SCHEMA_VERSION = 4/, 'storage schema should be versioned');
 assert.match(storage, /getRecoveryState/, 'storage should expose read-only recovery state');
 assert.match(storage, /aiMode: 'custom'/, 'self-managed key should remain the safe default mode');
+assert.match(storage, /saveTransactions/, 'storage should support atomic batch writes');
+assert.match(storage, /cloudSyncEnabled: false/, 'cloud sync should remain opt-in');
+assert.match(aiParser, /绝不能把跨日期金额相加成一笔/, 'batch prompt should forbid cross-date aggregation');
 
 console.log('Feature contracts verified.');

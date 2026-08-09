@@ -13,6 +13,9 @@ export interface Transaction {
   };
   subItems?: SplitItem[];
   tag?: string;
+  batchId?: string;
+  merchant?: string;
+  orderId?: string;
 }
 
 export interface AppSettings {
@@ -23,6 +26,7 @@ export interface AppSettings {
   model: string;
   monthlyBudget: number;
   categories: string[];
+  cloudSyncEnabled: boolean;
 }
 
 export interface CloudSession {
@@ -61,6 +65,34 @@ export interface ParsedTransaction {
   date: string;
   tag?: string;
   splitItems?: SplitItem[];
+  merchant?: string;
+  orderId?: string;
+  grouping?: 'folded' | 'separate';
+}
+
+export interface ParsedBatch {
+  transactions: ParsedTransaction[];
+  warnings?: string[];
+}
+
+export interface LedgerPayload {
+  schemaVersion: number;
+  settings: Pick<AppSettings, 'categories' | 'monthlyBudget'>;
+  transactions: Transaction[];
+}
+
+export interface CloudLedgerSnapshot {
+  checksum: string;
+  payload: LedgerPayload;
+  revision: number;
+  updatedAt: string;
+}
+
+export interface CloudSyncState {
+  error?: string;
+  lastSyncedAt?: string;
+  revision: number;
+  status: 'disabled' | 'idle' | 'syncing' | 'conflict' | 'error';
 }
 
 export type Tab = 'dashboard' | 'input' | 'transactions' | 'settings';

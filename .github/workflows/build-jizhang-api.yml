@@ -2,7 +2,7 @@ name: Build jizhang API image
 
 on:
   push:
-    branches: ['codex/**']
+    branches: ['main', 'codex/**']
     paths:
       - 'server/**'
       - '.github/workflows/build-jizhang-api.yml'
@@ -27,8 +27,9 @@ jobs:
           context: ./server
           file: ./server/Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/jizhang-api:v1.4.4-cloud
-            ghcr.io/${{ github.repository_owner }}/jizhang-api:${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/jizhang-api:${{ github.sha }}
+          build-args: |
+            APP_VERSION=0.2.0-rc.1
+            GIT_SHA=${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

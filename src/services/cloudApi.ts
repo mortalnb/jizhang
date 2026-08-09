@@ -1,4 +1,4 @@
-import type { AppSettings, CloudSession, ParsedTransaction } from '../types';
+import type { AppSettings, CloudLedgerSnapshot, CloudSession, LedgerPayload, ParsedBatch, ParsedTransaction } from '../types';
 import { storage } from './storage';
 
 interface CloudResult<T> {
@@ -23,30 +23,49 @@ export interface CloudVisionResult {
     tag?: string;
   }>;
   tag?: string;
+  transactions?: CloudVisionResult[];
+  warnings?: string[];
 }
 
 const cloudUrl = (settings: Pick<AppSettings, 'cloudBaseUrl'>, path: string) => `${settings.cloudBaseUrl.replace(/\/$/, '')}${path}`;
 
-const cloudFetch = async <T>(settings: Pick<AppSettings, 'cloudBaseUrl'>, path: string, body?: unknown, retried = false): Promise<T> => {
+export class CloudApiError extends Error {
+  status: number;
+  payload?: unknown;
+
+  constructor(message: string, status: number, payload?: unknown) {
+    super(message);
+    this.name = 'CloudApiError';
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+interface CloudFetchOptions {
+  body?: unknown;
+  method?: 'GET' | 'POST' | 'PUT';
+}
+
+const cloudFetch = async <T>(settings: Pick<AppSettings, 'cloudBaseUrl'>, path: string, options: CloudFetchOptions = {}, retried = false): Promise<T> => {
   const session = storage.getCloudSession();
   if (!session?.accessToken) throw new Error('Cloud session is not available');
   const response = await fetch(cloudUrl(settings, path), {
-    method: body ? 'POST' : 'GET',
+    method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
     headers: {
       Authorization: `Bearer ${session.accessToken}`,
       'Content-Type': 'application/json',
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   if (response.status === 401 && !retried && session.refreshToken) {
     const refreshed = await cloudApi.refresh(settings, session.refreshToken);
     storage.saveCloudSession({ ...session, ...refreshed });
-    return cloudFetch(settings, path, body, true);
+    return cloudFetch(settings, path, options, true);
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     const message = payload?.error?.message || `Cloud API HTTP ${response.status}`;
-    throw new Error(message);
+    throw new CloudApiError(message, response.status, payload);
   }
   return (await response.json()) as T;
 };
@@ -73,7 +92,7 @@ export const cloudApi = {
   },
 
   async logout(settings: Pick<AppSettings, 'cloudBaseUrl'>) {
-    await cloudFetch(settings, '/api/auth/logout', {}).catch(() => undefined);
+    await cloudFetch(settings, '/api/auth/logout', { body: {} }).catch(() => undefined);
     storage.saveCloudSession(null);
   },
 
@@ -91,27 +110,49 @@ export const cloudApi = {
   },
 
   async parseTransaction(settings: Pick<AppSettings, 'cloudBaseUrl' | 'model'>, text: string, categories: string[]) {
-    const payload = await cloudFetch<CloudResult<Partial<ParsedTransaction>>>(settings, '/api/model/parse-transaction', {
-      categories,
-      model: settings.model,
-      text,
+    const payload = await cloudFetch<CloudResult<ParsedBatch | Partial<ParsedTransaction>>>(settings, '/api/model/parse-transaction', {
+      body: {
+        categories,
+        model: settings.model,
+        text,
+      },
     });
     return payload.result;
   },
 
   async recognizeBillImage(settings: Pick<AppSettings, 'cloudBaseUrl' | 'model'>, imageDataUrl: string, categories: string[]) {
     const payload = await cloudFetch<CloudResult<CloudVisionResult>>(settings, '/api/model/recognize-bill-image', {
-      categories,
-      imageDataUrl,
-      model: settings.model,
+      body: {
+        categories,
+        imageDataUrl,
+        model: settings.model,
+      },
     });
     return payload.result;
   },
 
   async testCapability(settings: Pick<AppSettings, 'cloudBaseUrl' | 'model'>) {
-    const payload = await cloudFetch<CloudResult<{ json?: boolean; text?: boolean; vision?: boolean }>>(settings, '/api/model/test-capability', {
-      model: settings.model,
+    const payload = await cloudFetch<CloudResult<{ audio?: boolean; json?: boolean; text?: boolean; vision?: boolean }>>(settings, '/api/model/test-capability', {
+      body: { model: settings.model },
     });
     return payload.result;
+  },
+
+  async transcribeAudio(settings: Pick<AppSettings, 'cloudBaseUrl'>, audioDataUrl: string, durationSeconds: number) {
+    const payload = await cloudFetch<CloudResult<{ text: string }>>(settings, '/api/model/transcribe-audio', {
+      body: { audioDataUrl, durationSeconds, language: 'zh', model: 'mimo-v2.5-asr' },
+    });
+    return payload.result.text;
+  },
+
+  getLedgerSnapshot(settings: Pick<AppSettings, 'cloudBaseUrl'>) {
+    return cloudFetch<{ snapshot: CloudLedgerSnapshot | null }>(settings, '/api/ledger-snapshot');
+  },
+
+  putLedgerSnapshot(
+    settings: Pick<AppSettings, 'cloudBaseUrl'>,
+    input: { checksum: string; expectedRevision: number; payload: LedgerPayload },
+  ) {
+    return cloudFetch<{ snapshot: CloudLedgerSnapshot }>(settings, '/api/ledger-snapshot', { body: input, method: 'PUT' });
   },
 };

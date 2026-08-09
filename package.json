@@ -1,12 +1,14 @@
 {
   "name": "test2",
   "private": true,
-  "version": "1.4.4",
+  "version": "1.5.0-rc.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "test:feature": "node scripts/verify-feature-contracts.mjs",
+    "test:storage": "node scripts/test-storage-roundtrip.mjs",
     "test:mimo-aa": "node scripts/test-mimo-aa.mjs",
+    "test:mimo-batch-asr": "node scripts/test-mimo-batch-asr.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",

@@ -4,7 +4,9 @@ import { requireAuth } from './auth.js';
 import { withModelSlot } from './concurrency.js';
 import { AppError } from './errors.js';
 import { callMimoChat, extractJsonObject, extractModelContent } from './mimo.js';
+import { buildTransactionPrompt, buildVisionPrompt, normalizeModelBatch, normalizeVisionBatch } from './modelContracts.js';
 import { assertModelAccess, recordUsage } from './quota.js';
+import { todayISOChina } from './time.js';
 import type { AuthenticatedRequest } from './types.js';
 
 const modelSchema = z.string().min(1).max(80).default('mimo-v2.5');
@@ -22,12 +24,24 @@ const imageSchema = z.object({
   model: modelSchema,
 });
 
-const capabilitySchema = z.object({
-  model: modelSchema,
+const audioSchema = z.object({
+  audioDataUrl: z.string().min(100).max(10_000_000).regex(/^data:audio\/(?:wav|x-wav|mpeg|mp3);base64,/i),
+  durationSeconds: z.coerce.number().min(0.4).max(60.5),
+  language: z.enum(['auto', 'zh', 'en']).default('zh'),
+  model: z.literal('mimo-v2.5-asr'),
 });
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const capabilitySchema = z.object({ model: modelSchema });
 
+const parseModelJson = (payload: unknown) => JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
+
+const validated = <T>(work: () => T) => {
+  try {
+    return work();
+  } catch {
+    throw new AppError(502, 'mimo_invalid_result', 'MiMo returned a result that does not match the ledger contract');
+  }
+};
 export const registerModelRoutes = (app: FastifyInstance) => {
   app.post('/api/model/parse-transaction', { preHandler: requireAuth }, async request => {
     const auth = (request as AuthenticatedRequest).auth;
@@ -35,32 +49,20 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     const endpoint = 'parse-transaction';
     await assertModelAccess(auth.userId, input.model, endpoint);
     const startedAt = Date.now();
-
     try {
       const payload = await withModelSlot('text', () => callMimoChat({
         model: input.model,
         temperature: 0.1,
-        max_completion_tokens: 2048,
+        max_completion_tokens: 4096,
         response_format: { type: 'json_object' },
         messages: [
-          {
-            role: 'system',
-            content:
-              `你是记账助手。请从用户输入中提取 JSON：amount, category, paymentMethod, description, detail, date, tag, splitItems。` +
-              `splitItems 的每一项可包含 amount, category, description, detail, tag。category 必须属于：${input.categories.join(', ')}。` +
-              `description 必须是适合账单列表显示的凝练标题，4 到 12 个中文字符左右，不要写解释。` +
-              `detail 用一句稍微更详细的中文说明消费场景、归类依据或拆单依据，避免编造不存在的商户和金额。` +
-              `AA 或多人分摊场景只记录用户最终承担的净支出，必须返回单笔账单，不要生成 splitItems。` +
-              `金额判断优先级：如果提供了用户实际付款和收到的回款，amount 等于实际付款减去回款；如果提供了实际转账金额，不得强制按人数平均；只有明确说明平均 AA 且没有提供实际回款金额时，才用总金额除以人数。` +
-              `示例：“我付了 120，他转我 60”返回 amount 60；“3 个人吃饭花了 300，是 AA 的”返回 amount 100；“两人吃饭 163，我付的，他只转我 80”返回 amount 83。` +
-              `今天是 ${todayISO()}。只返回 JSON。`,
-          },
+          { role: 'system', content: buildTransactionPrompt(input.categories, todayISOChina()) },
           { role: 'user', content: input.text },
         ],
       }));
-      const parsed = JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
+      const result = validated(() => normalizeModelBatch(parseModelJson(payload), input.categories));
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
-      return { result: parsed };
+      return { result };
     } catch (error) {
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
       throw error;
@@ -73,7 +75,6 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     const endpoint = 'recognize-bill-image';
     await assertModelAccess(auth.userId, input.model, endpoint);
     const startedAt = Date.now();
-
     try {
       const payload = await withModelSlot('image', () => callMimoChat({
         model: input.model,
@@ -82,32 +83,43 @@ export const registerModelRoutes = (app: FastifyInstance) => {
         max_completion_tokens: 4096,
         response_format: { type: 'json_object' },
         messages: [
-          {
-            role: 'system',
-            content:
-              `你是记账截图识别助手。请从截图中提取账单 JSON，只返回 JSON。` +
-              `字段：amount, category, paymentMethod, description, detail, date, tag, source, sourceLabel, splitItems。` +
-              `splitItems 每项字段：amount, category, description, detail, quantity, tag。category 必须属于：${input.categories.join(', ')}。` +
-              `盒马/超市长截图必须逐商品拆单，商品金额取右侧成交价，quantity 必须包含具体数量和单位，例如“3杯”“1袋”“950ml 1盒”。` +
-              `淘宝/天猫优先取每个订单的实付款，分别作为 splitItems 记录即可，不需要识别 quantity。` +
-              `饮料、咖啡、牛奶、酒水归“饮料”；饭菜、生鲜、水果、零食、冰淇淋、熟食归“餐费”；清洁洗护归“日用”；鞋服归“服饰”。` +
-              `tag 请提炼简短账目标签，例如 #饮品补给、#家庭餐食、#日用补给、#衣物鞋履、#线上服务、#盒马采购、#网购订单。` +
-              `支付方式看不到时返回空字符串。今天是 ${todayISO()}。`,
-          },
+          { role: 'system', content: buildVisionPrompt(input.categories, todayISOChina()) },
           {
             role: 'user',
             content: [
-              { type: 'text', text: '识别这张记账截图，返回可直接保存的 JSON。' },
+              { type: 'text', text: '识别这张记账截图，按一次结账与独立订单边界返回 JSON。' },
               { type: 'image_url', image_url: { url: input.imageDataUrl } },
             ],
           },
         ],
       }));
-      const parsed = JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
+      const result = validated(() => normalizeVisionBatch(parseModelJson(payload), input.categories));
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
-      return { result: parsed };
+      return { result };
     } catch (error) {
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
+      throw error;
+    }
+  });
+
+  app.post('/api/model/transcribe-audio', { preHandler: requireAuth }, async request => {
+    const auth = (request as AuthenticatedRequest).auth;
+    const input = audioSchema.parse(request.body);
+    const endpoint = 'transcribe-audio';
+    await assertModelAccess(auth.userId, input.model, endpoint);
+    const startedAt = Date.now();
+    try {
+      const payload = await withModelSlot('audio', () => callMimoChat({
+        model: input.model,
+        messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: input.audioDataUrl } }] }],
+        asr_options: { language: input.language },
+      }));
+      const text = extractModelContent(payload).trim();
+      if (!text) throw new AppError(502, 'mimo_empty_transcript', 'MiMo ASR returned an empty transcript');
+      await recordUsage({ audioSeconds: Math.ceil(input.durationSeconds), durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
+      return { result: { text } };
+    } catch (error) {
+      await recordUsage({ audioSeconds: Math.ceil(input.durationSeconds), durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
       throw error;
     }
   });
@@ -119,7 +131,6 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     await assertModelAccess(auth.userId, input.model, endpoint);
     const startedAt = Date.now();
     const transparentPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
-
     try {
       const payload = await withModelSlot('text', () => callMimoChat({
         model: input.model,
@@ -127,19 +138,13 @@ export const registerModelRoutes = (app: FastifyInstance) => {
         max_completion_tokens: 1024,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: '你是模型能力测试助手。只返回 JSON：{"text":true,"json":true,"vision":true}。如果无法读取图片，vision 为 false。' },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: '请确认你能返回 JSON，并判断图片是否可读。' },
-              { type: 'image_url', image_url: { url: transparentPixel } },
-            ],
-          },
+          { role: 'system', content: '只返回 JSON：{"text":true,"json":true,"vision":true}。如果无法读取图片，vision 为 false。' },
+          { role: 'user', content: [{ type: 'text', text: '确认 JSON 和图片能力。' }, { type: 'image_url', image_url: { url: transparentPixel } }] },
         ],
       }));
-      const parsed = JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
+      const parsed = validated(() => parseModelJson(payload)) as Record<string, unknown>;
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
-      return { result: parsed };
+      return { result: { ...parsed, audio: true } };
     } catch (error) {
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
       throw error;

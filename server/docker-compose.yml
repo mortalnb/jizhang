@@ -12,7 +12,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   api:
-    image: ${JIZHANG_API_IMAGE:-ghcr.io/mortalnb/jizhang-api:v1.4.4-cloud}
+    image: ${JIZHANG_API_IMAGE:?JIZHANG_API_IMAGE must be an immutable image tag or digest}
     restart: unless-stopped
     mem_limit: 256m
     cpus: 0.5

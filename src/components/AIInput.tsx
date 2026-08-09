@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react';
-import { Calendar, Check, CreditCard, DollarSign, Image, Loader2, ReceiptText, RefreshCw, Send, Tag, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Calendar, Check, CreditCard, DollarSign, Image, Layers, Loader2, Mic, ReceiptText, RefreshCw, Send, Square, Tag, Trash2, UnfoldVertical, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { aiParser } from '../services/aiParser';
 import { parseBillText, recognizeBillImage, sourceOptions, type BillSource, type RecognizedBill } from '../services/billRecognition';
 import { storage } from '../services/storage';
-import type { ParsedTransaction, SplitItem } from '../types';
+import { MAX_VOICE_SECONDS, startVoiceRecorder, transcribeVoice, type ActiveVoiceRecorder } from '../services/voiceInput';
+import type { ParsedBatch, ParsedTransaction, SplitItem } from '../types';
 
 const PAYMENT_OPTIONS = ['微信支付', '支付宝', '银行卡', '现金'];
 
@@ -13,18 +14,75 @@ interface AIInputProps {
   onNavigateToTransactions: () => void;
 }
 
+const itemTotal = (transaction: ParsedTransaction) => Number((transaction.splitItems ?? []).reduce((sum, item) => sum + item.amount, 0).toFixed(2));
+
+const mergedTransaction = (batch: ParsedBatch, label = '合并消费'): ParsedTransaction => {
+  const first = batch.transactions[0];
+  const splitItems = batch.transactions.flatMap(transaction =>
+    transaction.splitItems?.length
+      ? transaction.splitItems
+      : [{
+          amount: transaction.amount,
+          category: transaction.category,
+          description: transaction.description,
+          detail: transaction.detail,
+          tag: transaction.tag,
+        }],
+  );
+  return {
+    amount: Number(batch.transactions.reduce((sum, transaction) => sum + transaction.amount, 0).toFixed(2)),
+    category: first?.category ?? '其他',
+    paymentMethod: first?.paymentMethod ?? '',
+    description: label,
+    detail: `手动合并 ${batch.transactions.length} 笔消费；合并后使用第一笔日期。`,
+    date: first?.date ?? new Date().toISOString().slice(0, 10),
+    tag: first?.tag,
+    grouping: 'folded',
+    splitItems,
+  };
+};
+
+const expandedTransactions = (batch: ParsedBatch): ParsedTransaction[] =>
+  batch.transactions.flatMap((transaction): ParsedTransaction[] =>
+    transaction.splitItems?.length
+      ? transaction.splitItems.map(item => ({
+          amount: item.amount,
+          category: item.category,
+          paymentMethod: transaction.paymentMethod,
+          description: item.description,
+          detail: item.detail ?? transaction.detail,
+          date: transaction.date,
+          tag: item.tag ?? transaction.tag,
+          merchant: transaction.merchant,
+          grouping: 'separate' as const,
+        }))
+      : [{ ...transaction, grouping: 'separate' as const }],
+  );
+
 export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInputProps) {
   const settings = storage.getSettings();
   const categories = settings.categories;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<ActiveVoiceRecorder | null>(null);
+  const voiceTimerRef = useRef<number | undefined>(undefined);
+  const voiceLimitRef = useRef<number | undefined>(undefined);
   const [inputText, setInputText] = useState('');
-  const [parsedCard, setParsedCard] = useState<ParsedTransaction | null>(null);
+  const [parsedBatch, setParsedBatch] = useState<ParsedBatch | null>(null);
   const [recognizedBill, setRecognizedBill] = useState<RecognizedBill | null>(null);
   const [loading, setLoading] = useState(false);
-  const [loadingMode, setLoadingMode] = useState<'image' | 'text'>('text');
+  const [loadingMode, setLoadingMode] = useState<'image' | 'text' | 'voice'>('text');
+  const [recording, setRecording] = useState(false);
+  const [voiceSeconds, setVoiceSeconds] = useState(0);
+  const [savedCount, setSavedCount] = useState(0);
   const [success, setSuccess] = useState(false);
   const [requestRoute, setRequestRoute] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => () => {
+    window.clearInterval(voiceTimerRef.current);
+    window.clearTimeout(voiceLimitRef.current);
+    void recorderRef.current?.cancel();
+  }, []);
 
   const normalizeCategory = (category: string, text = '') => {
     if (categories.includes(category)) return category;
@@ -42,12 +100,15 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     return categories.includes('其他') ? '其他' : categories[categories.length - 1];
   };
 
-  const normalizeParsedCategories = (value: ParsedTransaction): ParsedTransaction => ({
-    ...value,
-    category: normalizeCategory(value.category, `${value.description} ${value.detail ?? ''}`),
-    splitItems: value.splitItems?.map(item => ({
-      ...item,
-      category: normalizeCategory(item.category, `${item.description} ${item.detail ?? ''}`),
+  const normalizeBatchCategories = (batch: ParsedBatch): ParsedBatch => ({
+    ...batch,
+    transactions: batch.transactions.map(transaction => ({
+      ...transaction,
+      category: normalizeCategory(transaction.category, `${transaction.description} ${transaction.detail ?? ''}`),
+      splitItems: transaction.splitItems?.map(item => ({
+        ...item,
+        category: normalizeCategory(item.category, `${item.description} ${item.detail ?? ''}`),
+      })),
     })),
   });
 
@@ -56,15 +117,15 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     setLoadingMode('text');
     setLoading(true);
     setSuccess(false);
-    setParsedCard(null);
+    setParsedBatch(null);
     setError(null);
     try {
       setRecognizedBill(null);
-      const result = await aiParser.parse(text, settings);
-      setParsedCard(normalizeParsedCategories({ ...result, paymentMethod: '' }));
-      setRequestRoute(settings.aiMode === 'cloud' ? '云端代理' : settings.apiKey.trim() ? '自填 Key' : '本地规则');
-    } catch (error) {
-      setError(error instanceof Error ? `解析失败：${error.message}` : '解析失败，请重试或切换智能服务。');
+      const result = normalizeBatchCategories(await aiParser.parse(text, settings));
+      setParsedBatch(result);
+      setRequestRoute(settings.aiMode === 'cloud' ? '云端 MiMo 批量解析' : import.meta.env.DEV ? '开发代理 · MiMo 批量解析' : settings.apiKey.trim() ? '自填 Key · MiMo 批量解析' : '本地规则');
+    } catch (caught) {
+      setError(caught instanceof Error ? `解析失败：${caught.message}` : '解析失败，请重试或切换智能服务。');
     } finally {
       setLoading(false);
     }
@@ -74,326 +135,241 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     setLoadingMode('image');
     setLoading(true);
     setSuccess(false);
-    setParsedCard(null);
+    setParsedBatch(null);
     setRecognizedBill(null);
     setError(null);
     try {
       const bill = await recognizeBillImage(file, categories, settings);
-      const result = normalizeParsedCategories({ ...bill.result, paymentMethod: '' });
-      setRecognizedBill({ ...bill, result });
-      setParsedCard(result);
-      setRequestRoute(settings.aiMode === 'cloud' ? '云端代理' : bill.mode === 'vision' ? '自填 Key' : '本地 OCR/规则');
-    } catch (error) {
-      setError(error instanceof Error ? `截图识别失败：${error.message}` : '截图识别失败，请重试或切换智能服务。');
+      const batch = normalizeBatchCategories(bill.batch);
+      const normalizedBill = { ...bill, batch, result: batch.transactions[0] };
+      setRecognizedBill(normalizedBill);
+      setParsedBatch(batch);
+      setRequestRoute(settings.aiMode === 'cloud' ? '云端 MiMo 视觉解析' : bill.mode === 'vision' ? '自填 Key · MiMo 视觉解析' : '本地 OCR/规则');
+    } catch (caught) {
+      setError(caught instanceof Error ? `截图识别失败：${caught.message}` : '截图识别失败，请重试或切换智能服务。');
     } finally {
       setLoading(false);
     }
   };
 
+  const stopRecording = async () => {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    recorderRef.current = null;
+    window.clearInterval(voiceTimerRef.current);
+    window.clearTimeout(voiceLimitRef.current);
+    setRecording(false);
+    setLoadingMode('voice');
+    setLoading(true);
+    setError(null);
+    try {
+      const recordingResult = await recorder.stop();
+      const transcript = await transcribeVoice(recordingResult, settings);
+      setInputText(transcript);
+      setRequestRoute(settings.aiMode === 'cloud' ? '云端 mimo-v2.5-asr' : import.meta.env.DEV ? '开发代理 · mimo-v2.5-asr' : '自填 Key · mimo-v2.5-asr');
+    } catch (caught) {
+      setError(caught instanceof Error ? `语音转写失败：${caught.message}` : '语音转写失败，请重试。');
+    } finally {
+      setLoading(false);
+      setVoiceSeconds(0);
+    }
+  };
+
+  const startRecording = async () => {
+    setError(null);
+    setSuccess(false);
+    try {
+      recorderRef.current = await startVoiceRecorder();
+      setVoiceSeconds(0);
+      setRecording(true);
+      voiceTimerRef.current = window.setInterval(() => setVoiceSeconds(seconds => Math.min(MAX_VOICE_SECONDS, seconds + 1)), 1000);
+      voiceLimitRef.current = window.setTimeout(() => void stopRecording(), MAX_VOICE_SECONDS * 1000);
+    } catch (caught) {
+      setError(caught instanceof Error ? `无法开始录音：${caught.message}` : '无法开始录音，请检查麦克风权限。');
+    }
+  };
+
   const switchBillSource = (source: BillSource) => {
     if (!recognizedBill) return;
-    const result = normalizeParsedCategories({ ...parseBillText(recognizedBill.rawText, source, categories), paymentMethod: parsedCard?.paymentMethod ?? '' });
+    let batch: ParsedBatch;
+    if (recognizedBill.mode === 'vision') {
+      batch = parsedBatch ?? recognizedBill.batch;
+      if ((source === 'hema' || source === 'walmart') && batch.transactions.length > 1) {
+        batch = { transactions: [mergedTransaction(batch, source === 'hema' ? '盒马鲜生订单' : '沃尔玛超市采购')] };
+      }
+    } else {
+      const result = parseBillText(recognizedBill.rawText, source, categories);
+      batch = { transactions: [result] };
+    }
+    batch = normalizeBatchCategories(batch);
     const sourceLabel = sourceOptions.find(option => option.value === source)?.label ?? '普通账单';
-    const next = {
-      ...recognizedBill,
-      source,
-      sourceLabel,
-      confidence: source === recognizedBill.source ? recognizedBill.confidence : 0.8,
-      result,
-    };
-    setRecognizedBill(next);
-    setParsedCard(result);
+    setRecognizedBill({ ...recognizedBill, source, sourceLabel, confidence: source === recognizedBill.source ? recognizedBill.confidence : 0.8, result: batch.transactions[0], batch });
+    setParsedBatch(batch);
+  };
+
+  const updateTransaction = (index: number, patch: Partial<ParsedTransaction>) => {
+    if (!parsedBatch) return;
+    setParsedBatch({ ...parsedBatch, transactions: parsedBatch.transactions.map((transaction, itemIndex) => itemIndex === index ? { ...transaction, ...patch } : transaction) });
+  };
+
+  const updateSplit = (transactionIndex: number, splitIndex: number, patch: Partial<SplitItem>) => {
+    const transaction = parsedBatch?.transactions[transactionIndex];
+    if (!parsedBatch || !transaction?.splitItems) return;
+    const splitItems = transaction.splitItems.map((item, itemIndex) => itemIndex === splitIndex ? { ...item, ...patch } : item);
+    updateTransaction(transactionIndex, { splitItems });
   };
 
   const save = () => {
-    if (!parsedCard) return;
-    if (parsedCard.splitItems?.length && recognizedBill?.source === 'hema') {
-      const warnings = parsedCard.detail?.includes('需核对') ? [parsedCard.detail] : [];
-      storage.saveTransaction({
-        amount: parsedCard.amount,
-        category: parsedCard.category,
-        date: parsedCard.date,
-        paymentMethod: parsedCard.paymentMethod,
-        description: parsedCard.description,
-        detail: parsedCard.detail,
-        recognition: {
-          itemCount: parsedCard.splitItems.length,
-          source: recognizedBill.mode === 'vision' ? '视觉模型识别' : recognizedBill.mode === 'local-ocr' ? '本地 OCR 回退' : '样本规则识别',
-          warnings,
-        },
-        subItems: parsedCard.splitItems,
-        tag: parsedCard.tag,
-      });
-    } else if (parsedCard.splitItems?.length) {
-      parsedCard.splitItems.forEach(item => {
-        storage.saveTransaction({
-          amount: item.amount,
-          category: item.category,
-          date: parsedCard.date,
-          paymentMethod: parsedCard.paymentMethod,
-          description: item.description,
-          detail: item.detail ?? parsedCard.detail,
-          tag: item.tag ?? parsedCard.tag,
-        });
-      });
-    } else {
-      storage.saveTransaction({
-        amount: parsedCard.amount,
-        category: parsedCard.category,
-        date: parsedCard.date,
-        paymentMethod: parsedCard.paymentMethod,
-        description: parsedCard.description,
-        detail: parsedCard.detail,
-        tag: parsedCard.tag,
-      });
+    if (!parsedBatch?.transactions.length) return;
+    const invalid = parsedBatch.transactions.find(transaction => transaction.amount <= 0 || !/^20\d{2}-\d{2}-\d{2}$/.test(transaction.date));
+    if (invalid) {
+      setError('保存前请确认每一笔的金额大于 0，日期格式正确。');
+      return;
     }
-
+    const recognitionSource = recognizedBill
+      ? recognizedBill.mode === 'vision' ? '视觉模型识别' : recognizedBill.mode === 'local-ocr' ? '本地 OCR 回退' : '样本规则识别'
+      : undefined;
+    const saved = storage.saveTransactions(parsedBatch.transactions.map(transaction => ({
+      amount: transaction.amount,
+      category: transaction.category,
+      date: transaction.date,
+      paymentMethod: transaction.paymentMethod,
+      description: transaction.description,
+      detail: transaction.detail,
+      recognition: recognitionSource ? {
+        itemCount: transaction.splitItems?.length,
+        source: recognitionSource,
+        warnings: parsedBatch.warnings,
+      } : undefined,
+      subItems: transaction.splitItems,
+      tag: transaction.tag,
+      merchant: transaction.merchant,
+      orderId: transaction.orderId,
+    })));
     setInputText('');
-    setParsedCard(null);
+    setParsedBatch(null);
     setRecognizedBill(null);
+    setSavedCount(saved.length);
     setSuccess(true);
     onTransactionSaved();
     window.setTimeout(() => {
       setSuccess(false);
       onNavigateToTransactions();
-    }, 900);
+    }, 1100);
   };
 
-  const updateSplit = (index: number, patch: Partial<SplitItem>) => {
-    if (!parsedCard?.splitItems) return;
-    const splitItems = parsedCard.splitItems.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item));
-    const amount = Number(splitItems.reduce((sum, item) => sum + item.amount, 0).toFixed(2));
-    setParsedCard({ ...parsedCard, amount, splitItems });
-  };
+  const hasFoldedItems = Boolean(parsedBatch?.transactions.some(transaction => transaction.splitItems?.length));
 
   return (
     <div className="w-full max-w-md mx-auto p-4 space-y-6 animate-slide-up pb-24">
       <section className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          记一笔 <ReceiptText size={18} className="text-brand-purple" />
-        </h1>
-        <p className="text-xs text-dark-muted">输入一句话或导入账单截图，确认后保存到本地账本。</p>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">记一笔 <ReceiptText size={18} className="text-brand-purple" /></h1>
+        <p className="text-xs text-dark-muted">文字、截图或应用内录音均先解析成一笔或多笔，确认后再原子写入本地账本。</p>
       </section>
 
       {error && <div className="rounded-xl border border-brand-rose/30 bg-brand-rose/5 px-3 py-2 text-xs text-brand-rose">{error}</div>}
       {requestRoute && <div className="rounded-xl border border-brand-purple/20 bg-brand-purple/5 px-3 py-2 text-xs text-brand-purple">本次请求路径：{requestRoute}</div>}
 
-      {!parsedCard && !loading && !success && (
+      {!parsedBatch && !loading && !success && (
         <section className="glass-panel rounded-2xl p-4 space-y-4">
-          <div className="relative ai-pulse-glow rounded-xl border border-black/[0.08] overflow-hidden bg-white/50 transition-all">
+          <div className={`relative ai-pulse-glow rounded-xl border overflow-hidden bg-white/50 transition-all ${recording ? 'border-brand-rose/40' : 'border-black/[0.08]'}`}>
             <textarea
-              rows={5}
-              placeholder={'例如：昨晚在盒马买了面包和洗衣液花了 150，其中面包 90，洗衣液 60，支付宝支付'}
+              rows={6}
+              placeholder={'例如：8月1日买咖啡18元；8月2日坐地铁3元。也可以点击麦克风直接说。'}
               value={inputText}
               onChange={event => setInputText(event.target.value)}
-              className="w-full text-sm bg-transparent rounded-xl px-4 py-3.5 text-dark-text focus:outline-none placeholder-dark-muted resize-none leading-relaxed"
+              disabled={recording}
+              className="w-full text-sm bg-transparent rounded-xl px-4 py-3.5 pb-14 text-dark-text focus:outline-none placeholder-dark-muted resize-none leading-relaxed disabled:opacity-60"
             />
-            <button
-              type="button"
-              disabled={!inputText.trim()}
-              onClick={() => parse(inputText)}
-              className="absolute right-3 bottom-3 p-2 bg-brand-purple disabled:opacity-40 text-white rounded-lg shadow-sm transition-all active:scale-95"
-              aria-label="解析记账文本"
-            >
-              <Send size={14} />
-            </button>
+            <div className="absolute left-3 right-3 bottom-3 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => recording ? void stopRecording() : void startRecording()}
+                className={`h-9 px-3 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 ${recording ? 'bg-brand-rose text-white' : 'bg-dark-surface border border-black/[0.08] text-brand-purple'}`}
+              >
+                {recording ? <Square size={13} /> : <Mic size={15} />}
+                {recording ? `停止录音 ${voiceSeconds}s` : '应用内语音'}
+              </button>
+              <button type="button" disabled={!inputText.trim() || recording} onClick={() => void parse(inputText)} className="h-9 px-3 bg-brand-purple disabled:opacity-40 text-white rounded-lg shadow-sm transition-all active:scale-95 flex items-center gap-1.5 text-xs font-bold" aria-label="解析记账文本">
+                <Send size={14} />解析
+              </button>
+            </div>
           </div>
+          {recording && <p className="text-[10px] text-brand-rose">正在采集麦克风音频，最长 {MAX_VOICE_SECONDS} 秒；停止后由 mimo-v2.5-asr 转成可编辑文字，不会自动入账。</p>}
 
-          <input
-            type="file"
-            ref={fileInputRef}
-            accept="image/*"
-            className="hidden"
-            onChange={event => {
-              const file = event.target.files?.[0];
-              if (file) void recognizeImage(file);
-              event.target.value = '';
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full py-3.5 bg-dark-surface border border-black/[0.06] hover:border-brand-purple/35 hover:bg-brand-purple/[0.04] active:scale-95 font-medium rounded-xl flex items-center justify-center gap-2 transition-all"
-          >
-            <Image size={18} className="text-brand-purple" />
-            导入盒马/淘宝截图并自动拆单
+          <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) void recognizeImage(file); event.target.value = ''; }} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} className="w-full py-3.5 bg-dark-surface border border-black/[0.06] hover:border-brand-purple/35 hover:bg-brand-purple/[0.04] active:scale-95 font-medium rounded-xl flex items-center justify-center gap-2 transition-all">
+            <Image size={18} className="text-brand-purple" />导入超市/淘宝截图并按账单性质整理
           </button>
         </section>
       )}
 
       {loading && (
         <section className="glass-panel rounded-2xl p-8 flex flex-col items-center justify-center space-y-4 border border-brand-purple/15">
-          <div className="w-10 h-10 rounded-full bg-brand-purple/10 border border-brand-purple/20 flex items-center justify-center">
-            <Loader2 size={17} className="text-brand-purple animate-spin" />
-          </div>
-          <p className="text-sm font-semibold">
-            {loadingMode === 'image' ? '正在识别截图来源、提取商品和金额...' : '正在解析文字内容、提取金额和分类...'}
-          </p>
+          <div className="w-10 h-10 rounded-full bg-brand-purple/10 border border-brand-purple/20 flex items-center justify-center"><Loader2 size={17} className="text-brand-purple animate-spin" /></div>
+          <p className="text-sm font-semibold">{loadingMode === 'image' ? '正在识别账单性质、订单和商品...' : loadingMode === 'voice' ? 'mimo-v2.5-asr 正在转写录音...' : '正在按日期和付款行为拆分消费...'}</p>
         </section>
       )}
 
       {success && (
-        <section className="glass-panel rounded-2xl p-10 flex flex-col items-center justify-center space-y-4 border border-brand-success/20 shadow-md shadow-brand-success/2 animate-slide-up">
-          <div className="w-14 h-14 rounded-full bg-brand-success/10 border border-brand-success/30 flex items-center justify-center shadow-lg shadow-brand-success/5">
-            <Check size={32} className="text-brand-success" />
-          </div>
-          <div className="text-center space-y-1">
-            <h3 className="text-base font-bold">记账成功</h3>
-            <p className="text-xs text-dark-muted">交易已保存到本地账本。</p>
-          </div>
+        <section className="glass-panel rounded-2xl p-10 flex flex-col items-center justify-center space-y-4 border border-brand-success/20 animate-slide-up">
+          <div className="w-14 h-14 rounded-full bg-brand-success/10 border border-brand-success/30 flex items-center justify-center"><Check size={32} className="text-brand-success" /></div>
+          <div className="text-center space-y-1"><h3 className="text-base font-bold">已安全写入 {savedCount} 笔</h3><p className="text-xs text-dark-muted">本次批量只提交一次；若已开启云同步，将在后台上传新快照。</p></div>
         </section>
       )}
 
-      {parsedCard && !loading && (
-        <section className="glass-panel rounded-2xl p-5 border border-brand-purple/15 space-y-5 animate-slide-up">
-          <div className="flex justify-between items-center border-b border-black/[0.06] pb-2">
-            <div className="space-y-0.5">
-              <span className="text-sm font-bold text-brand-purple">解析结果确认</span>
-              {recognizedBill && (
-                <p className="text-[10px] text-dark-muted">
-                  自动识别：{recognizedBill.sourceLabel} · {recognizedBill.mode === 'vision' ? '视觉模型识别' : recognizedBill.mode === 'local-ocr' ? '本地 OCR 回退' : '样本规则识别'} · 置信度 {(recognizedBill.confidence * 100).toFixed(0)}%
-                </p>
-              )}
-              {parsedCard.detail?.includes('需核对') && (
-                <p className="text-[10px] text-amber-600">部分字段需要核对，保存前请检查金额、分类和数量单位。</p>
-              )}
-              {recognizedBill && !recognizedBill.rawText.trim() && (
-                <p className="text-[10px] text-amber-600">
-                  网页预览无法调用 Android 本地 OCR；请在 App 中识别，或手动补充金额。
-                </p>
-              )}
+      {parsedBatch && !loading && (
+        <section className="space-y-4 animate-slide-up">
+          <div className="glass-panel rounded-2xl p-4 border border-brand-purple/15 space-y-3">
+            <div className="flex justify-between items-start">
+              <div><span className="text-sm font-bold text-brand-purple">解析结果：{parsedBatch.transactions.length} 笔独立消费</span><p className="text-[10px] text-dark-muted mt-1">不同日期保留为不同卡片；商品明细留在同一结账卡片内折叠。</p></div>
+              <button type="button" onClick={() => { setParsedBatch(null); setRecognizedBill(null); }} className="p-1 rounded-lg hover:bg-black/[0.05] text-dark-muted"><X size={16} /></button>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setParsedCard(null);
-                setRecognizedBill(null);
-              }}
-              className="p-1 rounded-lg hover:bg-black/[0.05] text-dark-muted"
-            >
-              <X size={16} />
-            </button>
-          </div>
-
-          {recognizedBill && (
-            <div className="grid grid-cols-3 gap-2 rounded-xl bg-black/[0.02] border border-black/[0.05] p-1.5">
-              {sourceOptions.map(option => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => switchBillSource(option.value)}
-                  className={`text-[11px] rounded-lg py-2 font-semibold transition-all flex items-center justify-center gap-1 ${
-                    recognizedBill.source === option.value
-                      ? 'bg-white text-brand-purple shadow-sm border border-brand-purple/20'
-                      : 'text-dark-muted hover:text-dark-text'
-                  }`}
-                >
-                  {recognizedBill.source === option.value && <RefreshCw size={11} />}
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <FieldLabel icon={<DollarSign size={12} />} label="消费总计">
-              <input
-                type="number"
-                step="0.01"
-                disabled={Boolean(parsedCard.splitItems?.length)}
-                value={parsedCard.amount}
-                onChange={event => setParsedCard({ ...parsedCard, amount: Number(event.target.value) || 0 })}
-                className="w-full text-xl font-extrabold bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 text-brand-purple font-mono disabled:opacity-60"
-              />
-            </FieldLabel>
-            <FieldLabel icon={<Calendar size={12} />} label="交易日期">
-              <input
-                type="date"
-                value={parsedCard.date}
-                onChange={event => setParsedCard({ ...parsedCard, date: event.target.value })}
-                className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 text-dark-text focus:outline-none h-[42px]"
-              />
-            </FieldLabel>
-          </div>
-
-          <FieldLabel label="支付方式（可选）" icon={<CreditCard size={12} />}>
-            <select
-              value={parsedCard.paymentMethod}
-              onChange={event => setParsedCard({ ...parsedCard, paymentMethod: event.target.value })}
-              className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 focus:outline-none h-[40px]"
-            >
-              <option value="">不记录支付方式</option>
-              {PAYMENT_OPTIONS.map(option => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </FieldLabel>
-
-          {parsedCard.splitItems?.length ? (
-            <div className="space-y-3">
-              <p className="text-xs text-brand-purple font-bold">拆单明细</p>
-              {parsedCard.splitItems.map((item, index) => (
-                <div key={`${item.description}-${index}`} className="bg-black/[0.01] border border-black/[0.05] rounded-xl p-3 space-y-2.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={item.amount}
-                      onChange={event => updateSplit(index, { amount: Number(event.target.value) || 0 })}
-                      className="text-xs bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 py-1.5 text-brand-cyan font-semibold font-mono"
-                    />
-                    <input
-                      type="text"
-                      value={item.description}
-                      onChange={event => updateSplit(index, { description: event.target.value })}
-                      className="text-xs bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 py-1.5"
-                    />
-                  </div>
-                  <CategoryPicker categories={categories} value={item.category} onChange={category => updateSplit(index, { category })} compact />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <CategoryPicker categories={categories} value={parsedCard.category} onChange={category => setParsedCard({ ...parsedCard, category })} />
-              <div className="grid grid-cols-1 gap-3">
-                <FieldLabel label="备注" icon={<Tag size={12} />}>
-                  <input
-                    type="text"
-                    value={parsedCard.description}
-                    onChange={event => setParsedCard({ ...parsedCard, description: event.target.value })}
-                    className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 focus:outline-none"
-                  />
-                </FieldLabel>
+            {recognizedBill && <p className="text-[10px] text-dark-muted">自动识别：{recognizedBill.sourceLabel} · {recognizedBill.mode === 'vision' ? '视觉模型' : '本地 OCR/规则'} · 置信度 {(recognizedBill.confidence * 100).toFixed(0)}%</p>}
+            {parsedBatch.warnings?.length ? <p className="text-[10px] text-amber-700">需核对：{parsedBatch.warnings.join('；')}</p> : null}
+            {recognizedBill && (
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-black/[0.02] border border-black/[0.05] p-1.5">
+                {sourceOptions.map(option => <button key={option.value} type="button" onClick={() => switchBillSource(option.value)} className={`text-[10px] rounded-lg py-2 font-semibold flex items-center justify-center gap-1 ${recognizedBill.source === option.value ? 'bg-white text-brand-purple shadow-sm border border-brand-purple/20' : 'text-dark-muted'}`}>{recognizedBill.source === option.value && <RefreshCw size={10} />}{option.label}</button>)}
               </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              {parsedBatch.transactions.length > 1 && <button type="button" onClick={() => { const dates = new Set(parsedBatch.transactions.map(item => item.date)); if (dates.size > 1 && !window.confirm('这些消费日期不同。合并后会使用第一笔日期，仍要继续吗？')) return; setParsedBatch({ transactions: [mergedTransaction(parsedBatch)] }); }} className="py-2 rounded-xl border border-black/[0.08] text-[10px] font-bold text-brand-purple flex items-center justify-center gap-1"><Layers size={13} />手动合并为一笔</button>}
+              {hasFoldedItems && <button type="button" onClick={() => setParsedBatch({ transactions: expandedTransactions(parsedBatch) })} className="py-2 rounded-xl border border-black/[0.08] text-[10px] font-bold text-brand-purple flex items-center justify-center gap-1"><UnfoldVertical size={13} />商品展开为多笔</button>}
             </div>
-          )}
-
-          {parsedCard.tag && (
-            <div className="inline-flex items-center gap-1.5 text-xs text-brand-purple bg-brand-purple/10 border border-brand-purple/20 rounded-xl px-3 py-2">
-              <Tag size={12} />
-              {parsedCard.tag}
-            </div>
-          )}
-
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                setParsedCard(null);
-                setRecognizedBill(null);
-              }}
-              className="flex-1 py-3 border border-black/[0.08] hover:bg-black/[0.05] text-dark-muted rounded-xl text-xs font-semibold"
-            >
-              取消
-            </button>
-            <button type="button" onClick={save} className="flex-1 py-3 bg-brand-purple text-white text-xs font-bold rounded-xl shadow-sm flex items-center justify-center gap-1.5">
-              <Check size={16} />
-              确认入账
-            </button>
           </div>
+
+          {parsedBatch.transactions.map((transaction, transactionIndex) => {
+            const detailTotal = itemTotal(transaction);
+            const totalMismatch = detailTotal > 0 && Math.abs(detailTotal - transaction.amount) > 0.05;
+            return (
+              <article key={`${transaction.date}-${transactionIndex}`} className="glass-panel rounded-2xl p-4 border border-black/[0.07] space-y-4">
+                <div className="flex items-center justify-between"><span className="text-xs font-bold">第 {transactionIndex + 1} 笔 · {transaction.grouping === 'folded' || transaction.splitItems?.length ? '折叠账单' : '独立消费'}</span>{parsedBatch.transactions.length > 1 && <button type="button" onClick={() => setParsedBatch({ ...parsedBatch, transactions: parsedBatch.transactions.filter((_, index) => index !== transactionIndex) })} className="p-1.5 text-brand-rose"><Trash2 size={14} /></button>}</div>
+                <input value={transaction.description} onChange={event => updateTransaction(transactionIndex, { description: event.target.value })} className="w-full text-sm font-bold bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2" aria-label={`第${transactionIndex + 1}笔描述`} />
+                <div className="grid grid-cols-2 gap-3">
+                  <FieldLabel icon={<DollarSign size={12} />} label="实际支出"><input type="number" step="0.01" value={transaction.amount} onChange={event => updateTransaction(transactionIndex, { amount: Number(event.target.value) || 0 })} className="w-full text-lg font-extrabold bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 text-brand-purple font-mono" /></FieldLabel>
+                  <FieldLabel icon={<Calendar size={12} />} label="交易日期"><input type="date" value={transaction.date} onChange={event => updateTransaction(transactionIndex, { date: event.target.value })} className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 h-[42px]" /></FieldLabel>
+                </div>
+                <FieldLabel label="支付方式（可选）" icon={<CreditCard size={12} />}><select value={transaction.paymentMethod} onChange={event => updateTransaction(transactionIndex, { paymentMethod: event.target.value })} className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 h-[40px]"><option value="">不记录支付方式</option>{PAYMENT_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}</select></FieldLabel>
+                <div className="space-y-1"><span className="text-xs text-dark-muted font-medium flex items-center gap-1"><Tag size={12} />分类</span><CategoryPicker categories={categories} value={transaction.category} onChange={category => updateTransaction(transactionIndex, { category })} /></div>
+
+                {transaction.splitItems?.length ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between"><p className="text-xs text-brand-purple font-bold">商品明细（默认折叠保存）</p><span className={`text-[10px] ${totalMismatch ? 'text-amber-700' : 'text-dark-muted'}`}>明细 ¥{detailTotal.toFixed(2)}{totalMismatch ? ` / 实付 ¥${transaction.amount.toFixed(2)}` : ''}</span></div>
+                    {transaction.splitItems.map((item, splitIndex) => (
+                      <div key={`${item.description}-${splitIndex}`} className="bg-black/[0.01] border border-black/[0.05] rounded-xl p-3 space-y-2">
+                        <div className="grid grid-cols-[0.8fr_1.4fr] gap-2"><input type="number" step="0.01" value={item.amount} onChange={event => updateSplit(transactionIndex, splitIndex, { amount: Number(event.target.value) || 0 })} className="text-xs bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 py-1.5 text-brand-cyan font-semibold font-mono" /><input type="text" value={item.description} onChange={event => updateSplit(transactionIndex, splitIndex, { description: event.target.value })} className="text-xs bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 py-1.5" /></div>
+                        {item.quantity && <input type="text" value={item.quantity} onChange={event => updateSplit(transactionIndex, splitIndex, { quantity: event.target.value })} className="w-full text-[10px] bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 py-1.5" aria-label="商品数量" />}
+                        <CategoryPicker compact categories={categories} value={item.category} onChange={category => updateSplit(transactionIndex, splitIndex, { category })} />
+                      </div>
+                    ))}
+                    {totalMismatch && <p className="text-[10px] text-amber-700">商品合计与实付不同，通常来自优惠、运费或识别遗漏；保存时保留上方“实际支出”。</p>}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+
+          <div className="glass-panel rounded-2xl p-4 flex gap-3"><button type="button" onClick={() => { setParsedBatch(null); setRecognizedBill(null); }} className="flex-1 py-3 border border-black/[0.08] text-dark-muted rounded-xl text-xs font-semibold">取消</button><button type="button" onClick={save} className="flex-1 py-3 bg-brand-purple text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5"><Check size={16} />确认入账 {parsedBatch.transactions.length} 笔</button></div>
         </section>
       )}
     </div>
@@ -401,46 +377,13 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
 }
 
 function FieldLabel({ children, icon, label }: { children: React.ReactNode; icon: React.ReactNode; label: string }) {
-  return (
-    <label className="space-y-1 block">
-      <span className="text-xs text-dark-muted font-medium flex items-center gap-1">
-        {icon} {label}
-      </span>
-      {children}
-    </label>
-  );
+  return <label className="space-y-1 block"><span className="text-xs text-dark-muted font-medium flex items-center gap-1">{icon} {label}</span>{children}</label>;
 }
 
-function CategoryPicker({
-  categories,
-  compact = false,
-  onChange,
-  value,
-}: {
-  categories: string[];
-  compact?: boolean;
-  onChange: (category: string) => void;
-  value: string;
-}) {
+function CategoryPicker({ categories, compact = false, onChange, value }: { categories: string[]; compact?: boolean; onChange: (category: string) => void; value: string }) {
   return (
     <div className={compact ? 'flex gap-1.5 overflow-x-auto no-scrollbar py-0.5' : 'grid grid-cols-3 gap-2'}>
-      {categories.map(category => (
-        <button
-          key={category}
-          type="button"
-          onClick={() => onChange(category)}
-          className={`text-xs rounded-xl border transition-all active:scale-95 ${
-            compact ? 'px-2.5 py-1 shrink-0' : 'py-2.5 flex flex-col items-center justify-center gap-1'
-          } ${
-            value === category
-              ? 'bg-brand-purple/10 border-brand-purple/40 text-brand-purple font-bold'
-              : 'bg-black/[0.02] border-black/[0.05] hover:bg-black/[0.05]'
-          }`}
-        >
-          <span>{getCategoryEmoji(category)}</span>
-          <span>{category}</span>
-        </button>
-      ))}
+      {categories.map(category => <button key={category} type="button" onClick={() => onChange(category)} className={`text-xs rounded-xl border transition-all active:scale-95 ${compact ? 'px-2.5 py-1 shrink-0' : 'py-2 flex items-center justify-center gap-1'} ${value === category ? 'bg-brand-purple/10 border-brand-purple/40 text-brand-purple font-bold' : 'bg-black/[0.02] border-black/[0.05]'}`}><span>{getCategoryEmoji(category)}</span><span>{category}</span></button>)}
     </div>
   );
 }

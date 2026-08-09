@@ -1,10 +1,10 @@
 import { CapacitorPluginMlKitTextRecognition } from '@pantrist/capacitor-plugin-ml-kit-text-recognition';
-import type { AppSettings, ParsedTransaction, SplitItem } from '../types';
+import type { AppSettings, ParsedBatch, ParsedTransaction, SplitItem } from '../types';
 import { cloudApi } from './cloudApi';
 import { todayISO } from './date';
 import { storage } from './storage';
 
-export type BillSource = 'hema' | 'taobao' | 'generic';
+export type BillSource = 'hema' | 'walmart' | 'taobao' | 'generic';
 
 export interface RecognizedBill {
   mode: 'fixture' | 'local-ocr' | 'vision';
@@ -13,6 +13,7 @@ export interface RecognizedBill {
   confidence: number;
   rawText: string;
   result: ParsedTransaction;
+  batch: ParsedBatch;
 }
 
 interface BillFixture {
@@ -138,12 +139,14 @@ const BILL_FIXTURES: BillFixture[] = [
 
 const SOURCE_LABELS: Record<BillSource, string> = {
   hema: '盒马鲜生',
+  walmart: '沃尔玛/山姆',
   taobao: '淘宝/天猫',
   generic: '普通账单',
 };
 
 export const sourceOptions: Array<{ value: BillSource; label: string }> = [
   { value: 'hema', label: SOURCE_LABELS.hema },
+  { value: 'walmart', label: SOURCE_LABELS.walmart },
   { value: 'taobao', label: SOURCE_LABELS.taobao },
   { value: 'generic', label: SOURCE_LABELS.generic },
 ];
@@ -179,6 +182,7 @@ const guessFixture = async (file: File) => {
 
 const detectSource = (rawText: string): { source: BillSource; confidence: number } => {
   if (/盒马|交易完成|规格|单价/.test(rawText)) return { source: 'hema', confidence: 0.95 };
+  if (/沃尔玛|沃爾瑪|Walmart|山姆会员|Sam'?s Club/i.test(rawText)) return { source: 'walmart', confidence: 0.95 };
   if (/淘宝|天猫|全部订单|实付款|已发货|Turnitin/i.test(rawText)) return { source: 'taobao', confidence: 0.92 };
   return { source: 'generic', confidence: 0.45 };
 };
@@ -652,6 +656,29 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
   };
 };
 
+const parseWalmart = (rawText: string, categories: string[]): ParsedTransaction => {
+  const parsed = parseHema(rawText, categories);
+  const splitItems = parsed.splitItems?.map(item => ({
+    ...item,
+    detail: item.detail?.replace(/盒马鲜生/g, '沃尔玛/山姆'),
+    tag: '#超市采购',
+  }));
+  const dominant = splitItems
+    ? Object.entries(splitItems.reduce<Record<string, number>>((totals, item) => {
+        totals[item.category] = (totals[item.category] ?? 0) + item.amount;
+        return totals;
+      }, {})).sort(([, left], [, right]) => right - left)[0]?.[0]
+    : undefined;
+  return {
+    ...parsed,
+    category: dominant ?? parsed.category,
+    description: '沃尔玛超市采购',
+    detail: parsed.detail?.replace(/盒马鲜生/g, '沃尔玛/山姆'),
+    tag: '#超市采购',
+    splitItems,
+  };
+};
+
 const parseTaobao = (rawText: string, categories: string[]): ParsedTransaction => {
   const lines = rawText.split('\n').map(line => line.trim()).filter(Boolean);
   const splitItems: SplitItem[] = [];
@@ -725,17 +752,22 @@ const extractTrustedAmount = (rawText: string) => {
 
 export const parseBillText = (rawText: string, source: BillSource, categories: string[]): ParsedTransaction => {
   if (source === 'hema') return parseHema(rawText, categories);
+  if (source === 'walmart') return parseWalmart(rawText, categories);
   if (source === 'taobao') return parseTaobao(rawText, categories);
   return parseGeneric(rawText, categories);
 };
 
 interface MimoVisionSplitItem {
   amount?: number | string;
+  price?: number | string;
   category?: string;
   description?: string;
   detail?: string;
   quantity?: string;
   tag?: string;
+  name?: string;
+  itemName?: string;
+  productName?: string;
 }
 
 interface MimoVisionResult {
@@ -749,6 +781,8 @@ interface MimoVisionResult {
   sourceLabel?: string;
   splitItems?: MimoVisionSplitItem[];
   tag?: string;
+  transactions?: MimoVisionResult[];
+  warnings?: string[];
 }
 
 const imageToDataUrlForVision = async (file: File) => {
@@ -797,6 +831,7 @@ const normalizeRemoteCategory = (category: string | undefined, text: string, cat
 const sourceFromVision = (parsed: MimoVisionResult): BillSource => {
   const value = `${parsed.source ?? ''} ${parsed.sourceLabel ?? ''} ${parsed.description ?? ''}`.toLowerCase();
   if (/hema|盒马|盒馬/.test(value)) return 'hema';
+  if (/walmart|sam'?s club|沃尔玛|沃爾瑪|山姆/.test(value)) return 'walmart';
   if (/taobao|tmall|淘宝|淘寶|天猫|天貓/.test(value)) return 'taobao';
   return 'generic';
 };
@@ -808,42 +843,49 @@ const inferBillTag = (text: string, source: BillSource) => {
   if (/拖鞋|鞋|衣|裤|袜|帽|服饰/i.test(text)) return '#衣物鞋履';
   if (/检测|查重|服务|会员|Turnitin/i.test(text)) return '#线上服务';
   if (source === 'hema') return '#盒马采购';
+  if (source === 'walmart') return '#超市采购';
   if (source === 'taobao') return '#网购订单';
   return undefined;
 };
 
 const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], source: BillSource): ParsedTransaction => {
   const warnings: string[] = [];
+  const isGrocery = source === 'hema' || source === 'walmart';
   const splitItems = parsed.splitItems
-    ?.map(item => {
-      const amount = Number(item.amount) || 0;
-      const sourceText = `${item.description ?? ''} ${item.detail ?? ''} ${item.category ?? ''}`;
+      ?.map(item => {
+      const itemDescription = item.description ?? item.name ?? item.itemName ?? item.productName;
+      const amount = Number(item.amount ?? item.price) || 0;
+      const sourceText = `${itemDescription ?? ''} ${item.detail ?? ''} ${item.category ?? ''}`;
       const category = normalizeRemoteCategory(item.category, sourceText, categories);
-      const quantity = source === 'hema' ? item.quantity?.replace(/\s+/g, ' ').trim() : undefined;
+      const quantity = isGrocery ? item.quantity?.replace(/\s+/g, ' ').trim() : undefined;
       const tag = item.tag ?? inferBillTag(sourceText, source) ?? parsed.tag;
-      if (source === 'hema' && !quantity) warnings.push(`${item.description ?? category} 缺少数量单位`);
+      if (isGrocery && !quantity) warnings.push(`${itemDescription ?? category} 缺少数量单位`);
       return {
         amount: Number(amount.toFixed(2)),
         category,
-        description: (item.description || `${category}支出`).replace(/\s+/g, ' ').trim().slice(0, 32),
-        detail: item.detail || `${item.description ?? category}${quantity ? `，数量${quantity}` : '，数量需核对'}，金额¥${amount.toFixed(2)}。`,
+        description: (itemDescription || `${category}支出`).replace(/\s+/g, ' ').trim().slice(0, 32),
+        detail: item.detail || `${itemDescription ?? category}${quantity ? `，数量${quantity}` : '，数量需核对'}，金额¥${amount.toFixed(2)}。`,
         quantity,
         tag,
       } satisfies SplitItem;
     })
     .filter(item => item.amount > 0 && item.description);
 
-  const amount = splitItems?.length
-    ? Number(splitItems.reduce((sum, item) => sum + item.amount, 0).toFixed(2))
-    : Number(Number(parsed.amount) || 0);
+  const itemTotal = Number((splitItems ?? []).reduce((sum, item) => sum + item.amount, 0).toFixed(2));
   const parsedAmount = Number(parsed.amount) || 0;
-  if (source !== 'hema' && splitItems?.length && parsedAmount > 0 && Math.abs(parsedAmount - amount) > 0.05) {
-    warnings.push(`模型总额 ¥${parsedAmount.toFixed(2)} 与拆单合计 ¥${amount.toFixed(2)} 不一致`);
+  const amount = parsedAmount || itemTotal;
+  if (splitItems?.length && parsedAmount > 0 && Math.abs(parsedAmount - itemTotal) > 0.05) {
+    warnings.push(`实付 ¥${parsedAmount.toFixed(2)} 与商品明细合计 ¥${itemTotal.toFixed(2)} 不一致，已保留实付金额`);
   }
   const categoryText = `${parsed.category ?? ''} ${parsed.description ?? ''} ${parsed.detail ?? ''}`;
-  const category = source === 'hema' ? knownCategory(categories, '餐费') : normalizeRemoteCategory(parsed.category, categoryText, categories);
+  const categoryTotals = splitItems?.reduce<Record<string, number>>((totals, item) => {
+    totals[item.category] = (totals[item.category] ?? 0) + item.amount;
+    return totals;
+  }, {});
+  const dominantCategory = categoryTotals ? Object.entries(categoryTotals).sort(([, left], [, right]) => right - left)[0]?.[0] : undefined;
+  const category = isGrocery ? dominantCategory ?? knownCategory(categories, '餐费') : normalizeRemoteCategory(parsed.category, categoryText, categories);
   const description =
-    (source === 'hema' ? '盒马鲜生订单' : parsed.description?.replace(/\s+/g, ' ').trim().slice(0, 24)) ||
+    (source === 'hema' ? '盒马鲜生订单' : source === 'walmart' ? '沃尔玛超市采购' : parsed.description?.replace(/\s+/g, ' ').trim().slice(0, 24)) ||
     (source === 'taobao' ? '淘宝天猫订单' : '截图账单识别');
 
   return {
@@ -858,6 +900,51 @@ const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], s
     date: parsed.date || todayISO(),
     tag: parsed.tag ?? inferBillTag(`${description} ${parsed.detail ?? ''}`, source),
     splitItems: splitItems && splitItems.length > 1 ? splitItems : undefined,
+    merchant: source === 'hema' ? '盒马鲜生' : source === 'walmart' ? '沃尔玛/山姆' : undefined,
+    grouping: splitItems && splitItems.length > 1 ? 'folded' : 'separate',
+  };
+};
+
+const normalizeVisionBatch = (parsed: MimoVisionResult, categories: string[], detectedSource: BillSource): ParsedBatch => {
+  const rawTransactions = parsed.transactions?.length ? parsed.transactions : [parsed];
+  const normalized = rawTransactions.map(transaction => {
+    const source = sourceFromVision({ ...transaction, source: transaction.source ?? detectedSource });
+    return normalizeVisionResult(transaction, categories, source === 'generic' ? detectedSource : source);
+  });
+  const isGrocery = detectedSource === 'hema' || detectedSource === 'walmart';
+  if (!isGrocery || normalized.length <= 1) return { transactions: normalized, warnings: parsed.warnings };
+
+  const splitItems = normalized.flatMap(transaction =>
+    transaction.splitItems?.length
+      ? transaction.splitItems
+      : [{
+          amount: transaction.amount,
+          category: transaction.category,
+          description: transaction.description,
+          detail: transaction.detail,
+          tag: transaction.tag,
+        }],
+  );
+  const paidAmount = Number(parsed.amount) || Number(normalized.reduce((sum, transaction) => sum + transaction.amount, 0).toFixed(2));
+  const categoryTotals = splitItems.reduce<Record<string, number>>((totals, item) => {
+    totals[item.category] = (totals[item.category] ?? 0) + item.amount;
+    return totals;
+  }, {});
+  const category = Object.entries(categoryTotals).sort(([, left], [, right]) => right - left)[0]?.[0] ?? knownCategory(categories, '其他');
+  return {
+    transactions: [{
+      amount: paidAmount,
+      category,
+      paymentMethod: normalized.find(transaction => transaction.paymentMethod)?.paymentMethod ?? '',
+      description: detectedSource === 'hema' ? '盒马鲜生订单' : '沃尔玛超市采购',
+      detail: `同一次超市结账已折叠，共 ${splitItems.length} 个商品明细，实付 ¥${paidAmount.toFixed(2)}。`,
+      date: normalized[0]?.date ?? todayISO(),
+      tag: detectedSource === 'hema' ? '#盒马采购' : '#超市采购',
+      merchant: detectedSource === 'hema' ? '盒马鲜生' : '沃尔玛/山姆',
+      grouping: 'folded',
+      splitItems,
+    }],
+    warnings: parsed.warnings,
   };
 };
 
@@ -867,7 +954,8 @@ const recognizeWithMimoVision = async (file: File, categories: string[], setting
     if (!storage.getCloudSession()?.accessToken) throw new Error('云端模式未登录，请先登录云端服务或切换到自填模型');
     const parsed = await cloudApi.recognizeBillImage(settings as Pick<AppSettings, 'cloudBaseUrl' | 'model'>, imageUrl, categories);
     const source = sourceFromVision(parsed);
-    return { mode: 'vision', source, sourceLabel: parsed.sourceLabel || SOURCE_LABELS[source], confidence: 0.93, rawText: JSON.stringify(parsed, null, 2), result: normalizeVisionResult(parsed, categories, source) } satisfies RecognizedBill;
+    const batch = normalizeVisionBatch(parsed, categories, source);
+    return { mode: 'vision', source, sourceLabel: parsed.sourceLabel || SOURCE_LABELS[source], confidence: 0.93, rawText: JSON.stringify(parsed, null, 2), result: batch.transactions[0], batch } satisfies RecognizedBill;
   }
 
   const apiKey = settings?.apiKey?.trim();
@@ -899,13 +987,13 @@ const recognizeWithMimoVision = async (file: File, categories: string[], setting
           {
             role: 'system',
             content:
-              `你是记账截图识别助手。请从截图中提取账单 JSON，只返回 JSON。` +
-              `字段：amount, category, paymentMethod, description, detail, date, tag, source, sourceLabel, splitItems。` +
+              `你是记账截图识别助手。只返回 JSON，最外层字段：source, sourceLabel, amount, transactions, warnings。` +
+              `transactions 中每笔字段：amount, category, paymentMethod, description, detail, date, tag, merchant, orderId, grouping, splitItems。` +
               `splitItems 每项字段：amount, category, description, detail, quantity, tag。` +
               `category 必须属于：${categories.join(', ')}。` +
               `description 是账单列表显示的凝练标题；detail 是稍微详细的识别依据。` +
-              `盒马/超市长截图必须逐商品拆单，商品金额取右侧成交价，quantity 必须包含具体数量和单位，例如“3杯”“1袋”“950ml 1盒”。` +
-              `淘宝/天猫优先取每个订单的实付款，分别作为 splitItems 记录即可，不需要识别 quantity。` +
+              `盒马、沃尔玛、山姆或其他超市的一张小票/一次结账必须返回一笔 transaction，grouping=folded，逐商品放入 splitItems；父级 amount 是优惠后的实际支付总额。quantity 必须包含具体数量和单位，例如“3杯”“1袋”“950ml 1盒”。` +
+              `淘宝/天猫同一个订单的商品可折叠在 splitItems；订单列表中的多个订单、不同日期或多次实付款必须返回多笔 transactions，绝不能合并金额。` +
               `饮料、咖啡、牛奶、酒水归“饮料”；饭菜、生鲜、水果、零食、冰淇淋、熟食归“餐费”；清洁洗护归“日用”；鞋服归“服饰”。` +
               `tag 请提炼简短账目标签，例如 #饮品补给、#家庭餐食、#日用补给、#衣物鞋履、#线上服务、#盒马采购、#网购订单。` +
               `支付方式看不到时返回空字符串。今天是 ${todayISO()}。`,
@@ -927,13 +1015,15 @@ const recognizeWithMimoVision = async (file: File, categories: string[], setting
     if (!content) throw new Error('MiMo vision returned empty content');
     const parsed = JSON.parse(extractJsonObject(String(content))) as MimoVisionResult;
     const source = sourceFromVision(parsed);
+    const batch = normalizeVisionBatch(parsed, categories, source);
     return {
       mode: 'vision',
       source,
       sourceLabel: parsed.sourceLabel || SOURCE_LABELS[source],
       confidence: 0.93,
       rawText: JSON.stringify(parsed, null, 2),
-      result: normalizeVisionResult(parsed, categories, source),
+      result: batch.transactions[0],
+      batch,
     } satisfies RecognizedBill;
   } finally {
     window.clearTimeout(timeout);
@@ -962,13 +1052,15 @@ export const recognizeBillImage = async (file: File, categories: string[], setti
         const detected = detectedByText.source === 'generic' && fixture ? { source: fixture.source, confidence: 0.88 } : detectedByText;
         const layout = buildOcrLayout(response.blocks ?? [], rawText);
         const coordinateResult = layout ? parseBillCoordinates(layout, detected.source, categories) : undefined;
+        const result = coordinateResult ?? parseBillText(rawText, detected.source, categories);
         return {
           mode: 'local-ocr',
           source: detected.source,
           sourceLabel: SOURCE_LABELS[detected.source],
           confidence: detected.confidence,
           rawText,
-          result: coordinateResult ?? parseBillText(rawText, detected.source, categories),
+          result,
+          batch: { transactions: [result] },
         };
       }
     } catch (error) {
@@ -980,13 +1072,15 @@ export const recognizeBillImage = async (file: File, categories: string[], setti
 
   const rawText = fixture?.rawText ?? '';
   const detected = fixture ? { source: fixture.source, confidence: 0.99 } : detectSource(rawText);
+  const result = parseBillText(rawText, detected.source, categories);
   return {
     mode: fixture ? 'fixture' : 'local-ocr',
     source: detected.source,
     sourceLabel: SOURCE_LABELS[detected.source],
     confidence: detected.confidence,
     rawText,
-    result: parseBillText(rawText, detected.source, categories),
+    result,
+    batch: { transactions: [result] },
   };
 };
 

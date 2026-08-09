@@ -2,12 +2,14 @@ import { config } from './config.js';
 import { AppError } from './errors.js';
 
 interface ChatRequest {
+  asr_options?: { language?: 'auto' | 'zh' | 'en' };
   max_completion_tokens?: number;
   messages: unknown[];
   model: string;
   response_format?: unknown;
   temperature?: number;
   top_p?: number;
+  stream?: boolean;
 }
 
 export const callMimoChat = async (body: ChatRequest) => {

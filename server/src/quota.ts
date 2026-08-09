@@ -36,13 +36,14 @@ export const assertModelAccess = async (userId: string, model: string, endpoint:
   };
 };
 
-export const recordUsage = (input: { durationMs: number; endpoint: string; errorCode?: string; model: string; success: boolean; userId: string }) =>
+export const recordUsage = (input: { audioSeconds?: number; durationMs: number; endpoint: string; errorCode?: string; model: string; success: boolean; userId: string }) =>
   prisma.usageEvent.create({
     data: {
       costUnits: input.success ? 1 : 0,
       endpoint: input.endpoint,
       errorCode: input.errorCode,
       durationMs: input.durationMs,
+      audioSeconds: input.audioSeconds,
       model: input.model,
       success: input.success,
       userId: input.userId,

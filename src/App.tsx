@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, BookText, Download, ListCollapse, Plus, Settings as SettingsIcon, TrendingUp } from 'lucide-react';
 import { parseBackup } from './services/backup';
 import { storage } from './services/storage';
+import { cloudLedgerSync } from './services/cloudLedgerSync';
 import { AIInput } from './components/AIInput';
 import { Dashboard } from './components/Dashboard';
 import { Settings } from './components/Settings';
@@ -13,6 +14,8 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = () => setRefreshKey(key => key + 1);
   const recovery = storage.getRecoveryState();
+
+  useEffect(() => cloudLedgerSync.start(), []);
 
   if (recovery) {
     return <RecoveryScreen reason={recovery.reason} />;
@@ -28,7 +31,7 @@ export default function App() {
           <span className="text-base font-semibold tracking-normal">记账</span>
         </div>
         <span className="text-[10px] text-dark-muted font-semibold bg-white/70 border border-black/[0.06] px-2.5 py-1 rounded-full uppercase tracking-wider font-mono">
-          v1.4.4
+          v1.5.0-rc.1
         </span>
       </header>
 

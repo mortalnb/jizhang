@@ -10,6 +10,11 @@ export const startOfMonth = () => {
   return new Date(Date.UTC(china.getUTCFullYear(), china.getUTCMonth(), 1) - chinaOffsetMs);
 };
 
+export const todayISOChina = () => {
+  const china = new Date(Date.now() + chinaOffsetMs);
+  return `${china.getUTCFullYear()}-${String(china.getUTCMonth() + 1).padStart(2, '0')}-${String(china.getUTCDate()).padStart(2, '0')}`;
+};
+
 export const addDays = (days: number) => {
   const value = new Date();
   value.setDate(value.getDate() + days);

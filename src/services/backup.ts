@@ -1,29 +1,32 @@
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import type { AppSettings, Transaction } from '../types';
+import type { AppSettings, LedgerPayload, Transaction } from '../types';
 
 export interface LedgerBackup {
-  backupVersion: 1;
+  backupVersion: 1 | 2;
   createdAt: string;
   checksum: string;
-  payload: {
-    schemaVersion: number;
-    settings: Pick<AppSettings, 'categories' | 'monthlyBudget'>;
-    transactions: Transaction[];
-  };
+  payload: LedgerPayload;
+  recoveredLegacyChecksum?: boolean;
 }
 
-const stable = (value: unknown): string => {
-  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+const stableNormalized = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(stableNormalized).join(',')}]`;
   if (value && typeof value === 'object') {
     return `{${Object.entries(value as Record<string, unknown>)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stable(entry)}`)
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableNormalized(entry)}`)
       .join(',')}}`;
   }
-  return JSON.stringify(value);
+  return JSON.stringify(value) ?? 'null';
 };
+
+// Match the value that is actually persisted by JSON.stringify: object keys with
+// undefined values disappear and undefined array entries become null.
+export const canonicalJsonValue = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+const stable = (value: unknown) => stableNormalized(canonicalJsonValue(value));
 
 // Detects accidental corruption. It is not a cryptographic signature.
 export const checksum = (value: unknown) => {
@@ -36,21 +39,42 @@ export const checksum = (value: unknown) => {
 };
 
 export const createBackup = (transactions: Transaction[], settings: AppSettings, schemaVersion: number): LedgerBackup => {
-  const payload = {
+  const payload = canonicalJsonValue({
     schemaVersion,
     settings: { categories: settings.categories, monthlyBudget: settings.monthlyBudget },
     transactions,
-  };
-  return { backupVersion: 1, createdAt: new Date().toISOString(), checksum: checksum(payload), payload };
+  } satisfies LedgerPayload);
+  return { backupVersion: 2, createdAt: new Date().toISOString(), checksum: checksum(payload), payload };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const hasValidShape = (backup: LedgerBackup) => {
+  if (!isRecord(backup.payload) || !Array.isArray(backup.payload.transactions) || !isRecord(backup.payload.settings)) return false;
+  if (!Array.isArray(backup.payload.settings.categories) || !backup.payload.settings.categories.every(category => typeof category === 'string')) return false;
+  if (!Number.isFinite(Number(backup.payload.settings.monthlyBudget))) return false;
+  return backup.payload.transactions.every(transaction =>
+    isRecord(transaction) &&
+    typeof transaction.id === 'string' &&
+    typeof transaction.category === 'string' &&
+    typeof transaction.date === 'string' &&
+    Number.isFinite(Number(transaction.amount)),
+  );
 };
 
 export const parseBackup = (raw: string): LedgerBackup => {
   const backup = JSON.parse(raw) as LedgerBackup;
-  if (backup.backupVersion !== 1 || !backup.payload || !Array.isArray(backup.payload.transactions) || !backup.payload.settings) {
+  if (![1, 2].includes(backup.backupVersion) || !hasValidShape(backup)) {
     throw new Error('备份格式不受支持');
   }
-  if (backup.checksum !== checksum(backup.payload)) throw new Error('备份校验失败，文件可能已损坏');
-  return backup;
+  const expected = checksum(backup.payload);
+  if (backup.checksum !== expected) {
+    // v1 computed the checksum before JSON serialization, so optional undefined
+    // fields could make an otherwise intact exported backup fail verification.
+    if (backup.backupVersion !== 1) throw new Error('备份校验失败，文件可能已损坏');
+    return { ...backup, backupVersion: 2, checksum: expected, payload: canonicalJsonValue(backup.payload), recoveredLegacyChecksum: true };
+  }
+  return { ...backup, backupVersion: 2, payload: canonicalJsonValue(backup.payload) };
 };
 
 const filename = (kind: 'manual' | 'auto') => `智能记账备份/${kind === 'auto' ? '自动备份-latest' : `账本-${new Date().toISOString().slice(0, 10)}`}.json`;

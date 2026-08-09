@@ -19,6 +19,7 @@ model User {
   entitlement    UserEntitlement?
   sessions       AuthSession[]
   usageEvents    UsageEvent[]
+  ledgerSnapshot LedgerSnapshot?
 
   @@map("users")
 }
@@ -68,9 +69,24 @@ model UsageEvent {
   success   Boolean
   errorCode String?  @map("error_code")
   durationMs Int?    @map("duration_ms")
+  audioSeconds Int?  @map("audio_seconds")
   createdAt DateTime @default(now()) @map("created_at")
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@map("usage_events")
+}
+
+model LedgerSnapshot {
+  userId        String   @id @map("user_id")
+  revision      Int      @default(1)
+  checksum      String
+  schemaVersion Int      @map("schema_version")
+  payload       Json
+  deviceId      String   @map("device_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ledger_snapshots")
 }
