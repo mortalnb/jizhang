@@ -33,3 +33,15 @@ jobs:
             GIT_SHA=${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          target: migrator
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/jizhang-api:${{ github.sha }}-migrate
+          build-args: |
+            APP_VERSION=0.2.0-rc.2
+            GIT_SHA=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { buildTransactionPrompt, normalizeModelBatch, normalizeVisionBatch } from './modelContracts.js';
 import { checksumLedgerPayload, ledgerUpdateSchema } from './ledgerContracts.js';
+import { extractModelContent } from './mimo.js';
 
 const categories = ['餐费', '饮料', '交通', '日用', '其他'];
 
@@ -70,5 +71,10 @@ describe('ledger snapshot contract', () => {
     expect(modelRoutes).toContain('/api/model/analyze-ledger');
     expect(modelRoutes).toContain("z.literal('mimo-v2.5-asr')");
     expect(ledgerRoutes).toContain('/api/ledger-snapshot');
+  });
+
+  it('accepts MiMo transcript and structured text response variants', () => {
+    expect(extractModelContent({ choices: [{ message: { audio: { transcript: '今天买咖啡十八元' } } }] })).toBe('今天买咖啡十八元');
+    expect(extractModelContent({ choices: [{ message: { content: [{ text: '第一段' }, { text: '第二段' }] } }] })).toBe('第一段第二段');
   });
 });

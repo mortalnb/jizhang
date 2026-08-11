@@ -66,4 +66,3 @@ export const registerLedgerRoutes = (app: FastifyInstance) => {
     return { snapshot: serializeSnapshot(snapshot) };
   });
 };
-

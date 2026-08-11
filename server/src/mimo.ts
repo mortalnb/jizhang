@@ -42,11 +42,19 @@ export const callMimoChat = async (body: ChatRequest) => {
 };
 
 export const extractModelContent = (payload: unknown) => {
-  const value = payload as { choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown } }> };
+  const value = payload as { choices?: Array<{ message?: { audio?: { transcript?: unknown }; content?: unknown; reasoning_content?: unknown } }> };
   const message = value.choices?.[0]?.message;
-  const content = message?.content ?? message?.reasoning_content;
-  if (!content) throw new AppError(502, 'mimo_empty_content', 'MiMo returned empty content');
-  return String(content);
+  if (typeof message?.content === 'string' && message.content.trim()) return message.content;
+  if (Array.isArray(message?.content)) {
+    const text = message.content
+      .map(item => item && typeof item === 'object' && 'text' in item ? String((item as { text?: unknown }).text ?? '') : '')
+      .join('')
+      .trim();
+    if (text) return text;
+  }
+  const fallback = message?.audio?.transcript ?? message?.reasoning_content;
+  if (typeof fallback === 'string' && fallback.trim()) return fallback;
+  throw new AppError(502, 'mimo_empty_content', 'MiMo returned empty content');
 };
 
 export const extractJsonObject = (value: string) => {
