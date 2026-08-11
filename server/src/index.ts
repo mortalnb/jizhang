@@ -8,10 +8,12 @@ import { sendError } from './errors.js';
 import { registerModelRoutes } from './modelRoutes.js';
 import { registerLedgerRoutes } from './ledgerRoutes.js';
 import { prisma } from './db.js';
+import { corsMethods } from './cors.js';
 
 const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie', 'req.body', 'res.headers.set-cookie', 'err'] }, bodyLimit: 14_000_000 });
 
 await app.register(cors, {
+  methods: [...corsMethods],
   origin(origin, callback) {
     if (!origin || config.corsOrigin.includes(origin)) return callback(null, true);
     callback(new Error('Origin not allowed'), false);
