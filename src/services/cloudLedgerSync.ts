@@ -167,4 +167,22 @@ export const cloudLedgerSync = {
       throw error;
     }
   },
+
+  async mergeFromCloud() {
+    const settings = readySettings();
+    setState({ status: 'syncing', error: undefined });
+    try {
+      const remote = await cloudApi.getLedgerSnapshot(settings);
+      if (!remote.snapshot) return await push({ overwriteRemote: true });
+      if (checksum(remote.snapshot.payload) !== remote.snapshot.checksum) throw new Error('云端账本校验失败，已停止合并');
+      suppressNextChange = true;
+      storage.mergeCloudPayload(remote.snapshot.payload);
+      setState({ status: 'idle', error: undefined, revision: remote.snapshot.revision, lastSyncedAt: remote.snapshot.updatedAt });
+      return await push();
+    } catch (error) {
+      suppressNextChange = false;
+      markFailure(error);
+      throw error;
+    }
+  },
 };

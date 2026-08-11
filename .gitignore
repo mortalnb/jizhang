@@ -35,6 +35,7 @@ android/capacitor-cordova-android-plugins/
 *.ap_
 *.aar
 *.idsig
+账本-*.json
 jizhang-web-dist.tar
 .tmp-release/
 .playwright-cli/

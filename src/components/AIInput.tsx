@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Calendar, Check, CreditCard, DollarSign, Image, Layers, Loader2, Mic, ReceiptText, RefreshCw, Send, Square, Tag, Trash2, UnfoldVertical, X } from 'lucide-react';
+import { Calendar, Check, DollarSign, Image, Layers, Loader2, Mic, ReceiptText, RefreshCw, Send, Square, Tag, Trash2, UnfoldVertical, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { aiParser } from '../services/aiParser';
 import { parseBillText, recognizeBillImage, sourceOptions, type BillSource, type RecognizedBill } from '../services/billRecognition';
 import { storage } from '../services/storage';
 import { MAX_VOICE_SECONDS, startVoiceRecorder, transcribeVoice, type ActiveVoiceRecorder } from '../services/voiceInput';
 import type { ParsedBatch, ParsedTransaction, SplitItem } from '../types';
-
-const PAYMENT_OPTIONS = ['微信支付', '支付宝', '银行卡', '现金'];
 
 interface AIInputProps {
   onTransactionSaved: () => void;
@@ -26,13 +24,11 @@ const mergedTransaction = (batch: ParsedBatch, label = '合并消费'): ParsedTr
           category: transaction.category,
           description: transaction.description,
           detail: transaction.detail,
-          tag: transaction.tag,
         }],
   );
   return {
     amount: Number(batch.transactions.reduce((sum, transaction) => sum + transaction.amount, 0).toFixed(2)),
     category: first?.category ?? '其他',
-    paymentMethod: first?.paymentMethod ?? '',
     description: label,
     detail: `手动合并 ${batch.transactions.length} 笔消费；合并后使用第一笔日期。`,
     date: first?.date ?? new Date().toISOString().slice(0, 10),
@@ -48,11 +44,10 @@ const expandedTransactions = (batch: ParsedBatch): ParsedTransaction[] =>
       ? transaction.splitItems.map(item => ({
           amount: item.amount,
           category: item.category,
-          paymentMethod: transaction.paymentMethod,
           description: item.description,
           detail: item.detail ?? transaction.detail,
           date: transaction.date,
-          tag: item.tag ?? transaction.tag,
+          tag: transaction.tag,
           merchant: transaction.merchant,
           grouping: 'separate' as const,
         }))
@@ -63,9 +58,12 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   const settings = storage.getSettings();
   const categories = settings.categories;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recorderRef = useRef<ActiveVoiceRecorder | null>(null);
   const voiceTimerRef = useRef<number | undefined>(undefined);
   const voiceLimitRef = useRef<number | undefined>(undefined);
+  const saveTransitionRef = useRef<number | undefined>(undefined);
+  const savingRef = useRef(false);
   const [inputText, setInputText] = useState('');
   const [parsedBatch, setParsedBatch] = useState<ParsedBatch | null>(null);
   const [recognizedBill, setRecognizedBill] = useState<RecognizedBill | null>(null);
@@ -75,12 +73,14 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   const [voiceSeconds, setVoiceSeconds] = useState(0);
   const [savedCount, setSavedCount] = useState(0);
   const [success, setSuccess] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [requestRoute, setRequestRoute] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => () => {
     window.clearInterval(voiceTimerRef.current);
     window.clearTimeout(voiceLimitRef.current);
+    window.clearTimeout(saveTransitionRef.current);
     void recorderRef.current?.cancel();
   }, []);
 
@@ -114,6 +114,8 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
 
   const parse = async (text: string) => {
     if (!text.trim()) return;
+    savingRef.current = false;
+    setSaving(false);
     setLoadingMode('text');
     setLoading(true);
     setSuccess(false);
@@ -132,6 +134,8 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   };
 
   const recognizeImage = async (file: File) => {
+    savingRef.current = false;
+    setSaving(false);
     setLoadingMode('image');
     setLoading(true);
     setSuccess(false);
@@ -176,6 +180,8 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   };
 
   const startRecording = async () => {
+    savingRef.current = false;
+    setSaving(false);
     setError(null);
     setSuccess(false);
     try {
@@ -220,42 +226,57 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
   };
 
   const save = () => {
-    if (!parsedBatch?.transactions.length) return;
+    if (savingRef.current || !parsedBatch?.transactions.length) return;
     const invalid = parsedBatch.transactions.find(transaction => transaction.amount <= 0 || !/^20\d{2}-\d{2}-\d{2}$/.test(transaction.date));
     if (invalid) {
       setError('保存前请确认每一笔的金额大于 0，日期格式正确。');
       return;
     }
-    const recognitionSource = recognizedBill
-      ? recognizedBill.mode === 'vision' ? '视觉模型识别' : recognizedBill.mode === 'local-ocr' ? '本地 OCR 回退' : '样本规则识别'
-      : undefined;
-    const saved = storage.saveTransactions(parsedBatch.transactions.map(transaction => ({
-      amount: transaction.amount,
-      category: transaction.category,
-      date: transaction.date,
-      paymentMethod: transaction.paymentMethod,
-      description: transaction.description,
-      detail: transaction.detail,
-      recognition: recognitionSource ? {
-        itemCount: transaction.splitItems?.length,
-        source: recognitionSource,
-        warnings: parsedBatch.warnings,
-      } : undefined,
-      subItems: transaction.splitItems,
-      tag: transaction.tag,
-      merchant: transaction.merchant,
-      orderId: transaction.orderId,
-    })));
-    setInputText('');
-    setParsedBatch(null);
-    setRecognizedBill(null);
-    setSavedCount(saved.length);
-    setSuccess(true);
-    onTransactionSaved();
-    window.setTimeout(() => {
-      setSuccess(false);
-      onNavigateToTransactions();
-    }, 1100);
+    savingRef.current = true;
+    setSaving(true);
+    setError(null);
+    let savedSuccessfully = false;
+    try {
+      const recognitionSource = recognizedBill
+        ? recognizedBill.mode === 'vision' ? '视觉模型识别' : recognizedBill.mode === 'local-ocr' ? '本地 OCR 回退' : '样本规则识别'
+        : undefined;
+      const saved = storage.saveTransactions(parsedBatch.transactions.map(transaction => ({
+        amount: transaction.amount,
+        category: transaction.category,
+        date: transaction.date,
+        description: transaction.description,
+        detail: transaction.detail,
+        recognition: recognitionSource ? {
+          itemCount: transaction.splitItems?.length,
+          source: recognitionSource,
+          warnings: parsedBatch.warnings,
+        } : undefined,
+        subItems: transaction.splitItems,
+        tag: transaction.tag,
+        merchant: transaction.merchant,
+        orderId: transaction.orderId,
+      })));
+      setSavedCount(saved.length);
+      setSuccess(true);
+      onTransactionSaved();
+      savedSuccessfully = true;
+      // Keep the disabled confirmation button in place until the pointer's
+      // double-click window closes, so a second click cannot hit the image
+      // upload button after the view changes.
+      saveTransitionRef.current = window.setTimeout(() => {
+        setInputText('');
+        setParsedBatch(null);
+        setRecognizedBill(null);
+        setRequestRoute(null);
+        setSaving(false);
+        window.requestAnimationFrame(() => textareaRef.current?.focus());
+      }, 350);
+    } catch (caught) {
+      savingRef.current = false;
+      setError(caught instanceof Error ? `入账失败：${caught.message}` : '入账失败，请重试。');
+    } finally {
+      if (!savedSuccessfully) setSaving(false);
+    }
   };
 
   const hasFoldedItems = Boolean(parsedBatch?.transactions.some(transaction => transaction.splitItems?.length));
@@ -270,14 +291,29 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
       {error && <div className="rounded-xl border border-brand-rose/30 bg-brand-rose/5 px-3 py-2 text-xs text-brand-rose">{error}</div>}
       {requestRoute && <div className="rounded-xl border border-brand-purple/20 bg-brand-purple/5 px-3 py-2 text-xs text-brand-purple">本次请求路径：{requestRoute}</div>}
 
-      {!parsedBatch && !loading && !success && (
+      {success && (
+        <section role="status" aria-live="polite" className="glass-panel rounded-2xl p-4 border border-brand-success/20 animate-slide-up space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 shrink-0 rounded-full bg-brand-success/10 border border-brand-success/30 flex items-center justify-center"><Check size={22} className="text-brand-success" /></div>
+            <div><h3 className="text-sm font-bold">已安全写入 {savedCount} 笔</h3><p className="text-[10px] text-dark-muted mt-0.5">输入框已清空，可继续记账；云同步开启时会在后台上传新快照。</p></div>
+          </div>
+          <button type="button" onClick={onNavigateToTransactions} className="w-full py-2.5 rounded-xl border border-brand-success/25 text-brand-success text-xs font-bold">查看刚入账明细</button>
+        </section>
+      )}
+
+      {!parsedBatch && !loading && (
         <section className="glass-panel rounded-2xl p-4 space-y-4">
           <div className={`relative ai-pulse-glow rounded-xl border overflow-hidden bg-white/50 transition-all ${recording ? 'border-brand-rose/40' : 'border-black/[0.08]'}`}>
             <textarea
+              ref={textareaRef}
               rows={6}
               placeholder={'例如：8月1日买咖啡18元；8月2日坐地铁3元。也可以点击麦克风直接说。'}
               value={inputText}
-              onChange={event => setInputText(event.target.value)}
+              onChange={event => {
+                setInputText(event.target.value);
+                setSuccess(false);
+                savingRef.current = false;
+              }}
               disabled={recording}
               className="w-full text-sm bg-transparent rounded-xl px-4 py-3.5 pb-14 text-dark-text focus:outline-none placeholder-dark-muted resize-none leading-relaxed disabled:opacity-60"
             />
@@ -290,7 +326,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
                 {recording ? <Square size={13} /> : <Mic size={15} />}
                 {recording ? `停止录音 ${voiceSeconds}s` : '应用内语音'}
               </button>
-              <button type="button" disabled={!inputText.trim() || recording} onClick={() => void parse(inputText)} className="h-9 px-3 bg-brand-purple disabled:opacity-40 text-white rounded-lg shadow-sm transition-all active:scale-95 flex items-center gap-1.5 text-xs font-bold" aria-label="解析记账文本">
+              <button type="button" disabled={!inputText.trim() || recording || saving} onClick={() => void parse(inputText)} className="h-9 px-3 bg-brand-purple disabled:opacity-40 text-white rounded-lg shadow-sm transition-all active:scale-95 flex items-center gap-1.5 text-xs font-bold" aria-label="解析记账文本">
                 <Send size={14} />解析
               </button>
             </div>
@@ -308,13 +344,6 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
         <section className="glass-panel rounded-2xl p-8 flex flex-col items-center justify-center space-y-4 border border-brand-purple/15">
           <div className="w-10 h-10 rounded-full bg-brand-purple/10 border border-brand-purple/20 flex items-center justify-center"><Loader2 size={17} className="text-brand-purple animate-spin" /></div>
           <p className="text-sm font-semibold">{loadingMode === 'image' ? '正在识别账单性质、订单和商品...' : loadingMode === 'voice' ? 'mimo-v2.5-asr 正在转写录音...' : '正在按日期和付款行为拆分消费...'}</p>
-        </section>
-      )}
-
-      {success && (
-        <section className="glass-panel rounded-2xl p-10 flex flex-col items-center justify-center space-y-4 border border-brand-success/20 animate-slide-up">
-          <div className="w-14 h-14 rounded-full bg-brand-success/10 border border-brand-success/30 flex items-center justify-center"><Check size={32} className="text-brand-success" /></div>
-          <div className="text-center space-y-1"><h3 className="text-base font-bold">已安全写入 {savedCount} 笔</h3><p className="text-xs text-dark-muted">本次批量只提交一次；若已开启云同步，将在后台上传新快照。</p></div>
         </section>
       )}
 
@@ -349,7 +378,6 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
                   <FieldLabel icon={<DollarSign size={12} />} label="实际支出"><input type="number" step="0.01" value={transaction.amount} onChange={event => updateTransaction(transactionIndex, { amount: Number(event.target.value) || 0 })} className="w-full text-lg font-extrabold bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 text-brand-purple font-mono" /></FieldLabel>
                   <FieldLabel icon={<Calendar size={12} />} label="交易日期"><input type="date" value={transaction.date} onChange={event => updateTransaction(transactionIndex, { date: event.target.value })} className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 h-[42px]" /></FieldLabel>
                 </div>
-                <FieldLabel label="支付方式（可选）" icon={<CreditCard size={12} />}><select value={transaction.paymentMethod} onChange={event => updateTransaction(transactionIndex, { paymentMethod: event.target.value })} className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 h-[40px]"><option value="">不记录支付方式</option>{PAYMENT_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}</select></FieldLabel>
                 <div className="space-y-1"><span className="text-xs text-dark-muted font-medium flex items-center gap-1"><Tag size={12} />分类</span><CategoryPicker categories={categories} value={transaction.category} onChange={category => updateTransaction(transactionIndex, { category })} /></div>
 
                 {transaction.splitItems?.length ? (
@@ -369,7 +397,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
             );
           })}
 
-          <div className="glass-panel rounded-2xl p-4 flex gap-3"><button type="button" onClick={() => { setParsedBatch(null); setRecognizedBill(null); }} className="flex-1 py-3 border border-black/[0.08] text-dark-muted rounded-xl text-xs font-semibold">取消</button><button type="button" onClick={save} className="flex-1 py-3 bg-brand-purple text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5"><Check size={16} />确认入账 {parsedBatch.transactions.length} 笔</button></div>
+          <div className="glass-panel rounded-2xl p-4 flex gap-3"><button type="button" onClick={() => { setParsedBatch(null); setRecognizedBill(null); }} className="flex-1 py-3 border border-black/[0.08] text-dark-muted rounded-xl text-xs font-semibold">取消</button><button type="button" disabled={saving} onClick={save} className="flex-1 py-3 bg-brand-purple disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5"><Check size={16} />{saving ? '正在入账' : `确认入账 ${parsedBatch.transactions.length} 笔`}</button></div>
         </section>
       )}
     </div>

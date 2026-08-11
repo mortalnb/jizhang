@@ -1,6 +1,7 @@
 import { DEFAULT_CATEGORIES } from '../data/categories';
 import type { AppSettings, CloudSession, CloudSyncState, LedgerPayload, Transaction } from '../types';
 import { canonicalJsonValue, checksum, createBackup, saveAutomaticBackup, type LedgerBackup } from './backup';
+import { normalizeMerchant, normalizeScenarioTag } from './ledgerNormalization';
 
 const TRANSACTIONS_KEY = 'ab_transactions';
 const SETTINGS_KEY = 'ab_settings';
@@ -8,7 +9,7 @@ const SCHEMA_KEY = 'ab_schema_version';
 const CLOUD_SESSION_KEY = 'ab_cloud_session';
 const DEVICE_ID_KEY = 'ab_device_id';
 const CLOUD_SYNC_STATE_KEY = 'ab_cloud_sync_state';
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 const MANIFEST_KEY = 'ab_integrity_manifest';
 const RECOVERY_KEY = 'ab_recovery_snapshot';
 const SEED_ID_PATTERN = /^seed-00[1-9]$/;
@@ -41,10 +42,20 @@ const migrateCategories = (categories?: string[]) => {
 const migrateTransactions = (transactions: Transaction[]) =>
   transactions
     .filter(item => !SEED_ID_PATTERN.test(item.id))
-    .map(item => ({
-      ...item,
-      paymentMethod: typeof item.paymentMethod === 'string' ? item.paymentMethod : '',
-    }));
+    .map(item => {
+      const next = { ...item } as Transaction & { paymentMethod?: unknown; tag?: unknown };
+      delete next.paymentMethod;
+      return {
+        ...next,
+        tag: normalizeScenarioTag(next.tag),
+        merchant: normalizeMerchant(next),
+        subItems: next.subItems?.map(subItem => {
+          const normalized = { ...subItem } as typeof subItem & { tag?: unknown };
+          delete normalized.tag;
+          return normalized;
+        }),
+      };
+    });
 
 export interface RecoveryState { reason: string; rawTransactions?: string | null; rawSettings?: string | null }
 let recoveryState: RecoveryState | null = null;
@@ -92,7 +103,6 @@ const validLedgerPayload = (payload: LedgerPayload) => {
     if (
       typeof transaction.description !== 'string' || !transaction.description ||
       typeof transaction.category !== 'string' || !transaction.category ||
-      typeof transaction.paymentMethod !== 'string' ||
       !/^20\d{2}-\d{2}-\d{2}$/.test(transaction.date) ||
       !Number.isFinite(Number(transaction.amount)) || Number(transaction.amount) < 0
     ) return false;
@@ -151,7 +161,7 @@ const readLedger = () => {
 
 const commitLedger = (transactions: Transaction[], settings: AppSettings, emitChange = true) => {
   const normalized = normalizeSettings(settings);
-  const persistedTransactions = canonicalJsonValue(transactions);
+  const persistedTransactions = canonicalJsonValue(migrateTransactions(transactions));
   const payload = ledgerPayload(persistedTransactions, normalized);
   localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(persistedTransactions));
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
@@ -231,12 +241,28 @@ export const storage = {
     if (!validLedgerPayload(payload)) throw new Error('云端账本结构校验失败，未覆盖本地数据');
     const current = readLedger();
     backupBeforeWrite(current.transactions, current.settings);
-    commitLedger(payload.transactions, {
+    const migrated = migrateTransactions(payload.transactions);
+    commitLedger(migrated, {
       ...current.settings,
       categories: migrateCategories(payload.settings.categories),
       monthlyBudget: Number(payload.settings.monthlyBudget) || 0,
     });
-    return payload.transactions.length;
+    return migrated.length;
+  },
+
+  mergeCloudPayload(payload: LedgerPayload) {
+    if (payload?.schemaVersion > CURRENT_SCHEMA_VERSION) throw new Error('云端账本来自更高版本，请升级应用后再合并');
+    if (!validLedgerPayload(payload)) throw new Error('云端账本结构校验失败，未修改本地数据');
+    const current = readLedger();
+    const imported = migrateTransactions(payload.transactions);
+    const currentIds = new Set(current.transactions.map(transaction => transaction.id));
+    const merged = [...current.transactions, ...imported.filter(transaction => !currentIds.has(transaction.id))];
+    backupBeforeWrite(current.transactions, current.settings);
+    commitLedger(merged, {
+      ...current.settings,
+      categories: migrateCategories([...current.settings.categories, ...payload.settings.categories]),
+    });
+    return merged.length;
   },
 
   getCloudSyncState(): CloudSyncState {
@@ -294,9 +320,12 @@ export const storage = {
     const { transactions, settings } = current;
     if (recoveryState) localStorage.setItem(RECOVERY_KEY, JSON.stringify(recoveryState));
     else backupBeforeWrite(transactions, settings);
-    const imported = backup.payload.transactions as Transaction[];
+    const imported = migrateTransactions(backup.payload.transactions as Transaction[]);
     const next = mode === 'replace' ? imported : [...transactions, ...imported.filter(item => !transactions.some(existing => existing.id === item.id))];
-    commitLedger(next, { ...settings, categories: backup.payload.settings.categories, monthlyBudget: backup.payload.settings.monthlyBudget });
+    const nextSettings = mode === 'replace' || transactions.length === 0
+      ? { ...settings, categories: backup.payload.settings.categories, monthlyBudget: backup.payload.settings.monthlyBudget }
+      : { ...settings, categories: migrateCategories([...settings.categories, ...backup.payload.settings.categories]) };
+    commitLedger(next, nextSettings);
     recoveryState = null;
     return next.length;
   },

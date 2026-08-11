@@ -1,11 +1,12 @@
 {
   "name": "test2",
   "private": true,
-  "version": "1.5.0-rc.1",
+  "version": "1.5.0-rc.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "test:feature": "node scripts/verify-feature-contracts.mjs",
+    "test:analytics": "node scripts/test-ledger-analytics.mjs",
     "test:storage": "node scripts/test-storage-roundtrip.mjs",
     "test:mimo-aa": "node scripts/test-mimo-aa.mjs",
     "test:mimo-batch-asr": "node scripts/test-mimo-batch-asr.mjs",

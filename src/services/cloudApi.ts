@@ -11,7 +11,8 @@ export interface CloudVisionResult {
   date?: string;
   description?: string;
   detail?: string;
-  paymentMethod?: string;
+  merchant?: string;
+  orderId?: string;
   source?: string;
   sourceLabel?: string;
   splitItems?: Array<{
@@ -143,6 +144,14 @@ export const cloudApi = {
       body: { audioDataUrl, durationSeconds, language: 'zh', model: 'mimo-v2.5-asr' },
     });
     return payload.result.text;
+  },
+
+  async analyzeLedger(
+    settings: Pick<AppSettings, 'cloudBaseUrl' | 'model'>,
+    input: { financialFacts: unknown; model: string; monthSummaries: unknown[]; recentTransactions: unknown[]; requirements: string[] },
+  ) {
+    const payload = await cloudFetch<CloudResult<{ insights: Array<{ body: string; title: string; tone: 'info' | 'warn' | 'success' }> }>>(settings, '/api/model/analyze-ledger', { body: input });
+    return payload.result;
   },
 
   getLedgerSnapshot(settings: Pick<AppSettings, 'cloudBaseUrl'>) {

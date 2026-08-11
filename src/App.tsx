@@ -31,7 +31,7 @@ export default function App() {
           <span className="text-base font-semibold tracking-normal">记账</span>
         </div>
         <span className="text-[10px] text-dark-muted font-semibold bg-white/70 border border-black/[0.06] px-2.5 py-1 rounded-full uppercase tracking-wider font-mono">
-          v1.5.0-rc.1
+          v1.5.0-rc.2
         </span>
       </header>
 
@@ -39,7 +39,6 @@ export default function App() {
         {activeTab === 'dashboard' && <Dashboard key={`dashboard-${refreshKey}`} />}
         {activeTab === 'input' && (
           <AIInput
-            key={`input-${refreshKey}`}
             onTransactionSaved={refresh}
             onNavigateToTransactions={() => setActiveTab('transactions')}
           />

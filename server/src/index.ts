@@ -25,9 +25,9 @@ app.setErrorHandler((error, request, reply) => sendError(reply, error, request.i
 app.get('/health', async () => ({ ok: true }));
 app.get('/api/version', async () => ({
   name: 'jizhang-server',
-  version: process.env.APP_VERSION || '0.2.0-rc.1',
+  version: process.env.APP_VERSION || '0.2.0-rc.2',
   gitSha: process.env.GIT_SHA || 'development',
-  capabilities: ['batch-parse', 'bill-grouping', 'mimo-v2.5-asr', 'ledger-sync'],
+  capabilities: ['batch-parse', 'bill-grouping', 'mimo-v2.5-asr', 'ledger-sync', 'ledger-analysis'],
 }));
 
 registerAuthRoutes(app);

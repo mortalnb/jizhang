@@ -1,9 +1,8 @@
 import type { AppSettings, ParsedBatch, ParsedTransaction, SplitItem } from '../types';
 import { cloudApi } from './cloudApi';
 import { todayISO } from './date';
+import { normalizeMerchant, normalizeScenarioTag } from './ledgerNormalization';
 import { storage } from './storage';
-
-const PAYMENT_METHODS = ['微信支付', '支付宝', '银行卡', '现金'];
 
 const findCategory = (text: string, categories: string[]) => {
   const direct = categories.find(category => text.includes(category));
@@ -24,18 +23,10 @@ const findCategory = (text: string, categories: string[]) => {
 };
 
 const detectTag = (text: string) => {
-  if (/盒马|沃尔玛|山姆|超市|周购|补给/.test(text)) return '#超市采购';
-  if (/淘宝|天猫|订单|网购/.test(text)) return '#淘宝网购';
-  if (/加油|汽油|油费/.test(text)) return '#加油';
+  if (/盒马|沃尔玛|山姆|超市|周购|补给/.test(text)) return '超市采购';
+  if (/淘宝|天猫|网购/.test(text)) return '网购';
+  if (/加油|汽油|油费/.test(text)) return '加油';
   return undefined;
-};
-
-const detectPayment = (text: string) => {
-  if (text.includes('支付宝') || text.includes('花呗')) return '支付宝';
-  if (text.includes('银行卡') || text.includes('信用卡')) return '银行卡';
-  if (text.includes('现金')) return '现金';
-  if (text.includes('微信')) return '微信支付';
-  return '';
 };
 
 const extractAmount = (text: string) => {
@@ -61,7 +52,7 @@ const extractJsonObject = (value: string) => {
   return cleaned.slice(start, end + 1);
 };
 
-const parseSplitItems = (text: string, categories: string[], tag?: string): SplitItem[] => {
+const parseSplitItems = (text: string, categories: string[]): SplitItem[] => {
   const itemText = text.includes('其中') ? text.split('其中').slice(1).join('其中') : text;
   const parts = itemText.replace(/[，；;]/g, ',').split(',').map(part => part.trim()).filter(Boolean);
   const items = parts.flatMap(part => {
@@ -71,7 +62,7 @@ const parseSplitItems = (text: string, categories: string[], tag?: string): Spli
     const amount = Number(match[2]);
     if (!description || amount <= 0) return [];
     const category = findCategory(description, categories);
-    return [{ amount, description: compactDescription(description, category), category, tag }];
+    return [{ amount, description: compactDescription(description, category), category }];
   });
   return items.length > 1 ? items : [];
 };
@@ -95,18 +86,18 @@ const dateFromText = (text: string) => {
 
 const localTransaction = (text: string, categories: string[]): ParsedTransaction => {
   const tag = detectTag(text);
-  const splitItems = parseSplitItems(text, categories, tag);
+  const splitItems = parseSplitItems(text, categories);
   const paidAmount = extractAmount(text);
   const amount = paidAmount || Number(splitItems.reduce((sum, item) => sum + item.amount, 0).toFixed(2));
   const category = splitItems[0]?.category ?? findCategory(text, categories);
   return {
     amount,
     category,
-    paymentMethod: detectPayment(text),
     description: splitItems.length ? (/盒马|沃尔玛|山姆|超市/.test(text) ? '超市采购' : '组合消费') : compactDescription(text, category),
     detail: buildDetail(text, category, amount, splitItems.length),
     date: dateFromText(text),
     tag,
+    merchant: normalizeMerchant({ description: text }),
     grouping: splitItems.length ? 'folded' : 'separate',
     splitItems: splitItems.length ? splitItems.map(item => ({ ...item, detail: buildDetail(item.description, item.category, item.amount) })) : undefined,
   };
@@ -136,7 +127,7 @@ const firstText = (value: Record<string, unknown>, keys: string[]) => {
 const normalizeRemoteTransaction = (parsed: Record<string, unknown>, text: string, categories: string[]): ParsedTransaction => {
   const parsedCategory = typeof parsed.category === 'string' ? parsed.category : '';
   const category = categories.includes(parsedCategory) ? parsedCategory : findCategory(`${text} ${parsedCategory}`, categories);
-  const parsedTag = typeof parsed.tag === 'string' ? parsed.tag : undefined;
+  const parsedTag = normalizeScenarioTag(parsed.tag);
   const rawSplitItems = Array.isArray(parsed.splitItems) ? parsed.splitItems : Array.isArray(parsed.lineItems) ? parsed.lineItems : undefined;
   const splitItems = rawSplitItems
     ? rawSplitItems.flatMap(raw => {
@@ -152,7 +143,6 @@ const normalizeRemoteTransaction = (parsed: Record<string, unknown>, text: strin
           description: compactDescription(description, itemCategory),
           detail: typeof raw.detail === 'string' ? raw.detail : undefined,
           quantity: firstText(raw, ['quantity', 'count', 'unit']),
-          tag: typeof raw.tag === 'string' ? raw.tag : parsedTag,
         } satisfies SplitItem];
       })
     : undefined;
@@ -164,12 +154,11 @@ const normalizeRemoteTransaction = (parsed: Record<string, unknown>, text: strin
   return {
     amount: Number(amount.toFixed(2)),
     category,
-    paymentMethod: detectPayment(text) || (typeof parsed.paymentMethod === 'string' && PAYMENT_METHODS.includes(parsed.paymentMethod) ? parsed.paymentMethod : ''),
     description: compactDescription(firstText(parsed, ['description', 'title', 'merchant']) ?? text, category),
     detail: mismatch ? `${detail} 商品明细合计 ¥${itemTotal.toFixed(2)}，与实付 ¥${parsedAmount.toFixed(2)} 不同，已保留实付金额。` : detail,
     date: validDate(parsed.date) ? String(parsed.date) : dateFromText(text),
     tag: parsedTag,
-    merchant: firstText(parsed, ['merchant', 'store']),
+    merchant: normalizeMerchant({ description: text, detail, merchant: firstText(parsed, ['merchant', 'store']) }),
     orderId: firstText(parsed, ['orderId', 'orderNumber']),
     grouping: parsed.grouping === 'folded' || splitItems?.length ? 'folded' : 'separate',
     splitItems: splitItems?.length ? splitItems : undefined,
@@ -192,16 +181,17 @@ export const normalizeParsedBatch = (value: unknown, text: string, categories: s
 };
 
 export const buildTransactionPrompt = (categories: string[]) => `你是记账助手。只返回一个 JSON 对象，最外层格式固定为 {"transactions":[...],"warnings":[]}。
-每个 transactions 元素表示一笔真实、独立发生的消费，字段为 amount, category, paymentMethod, description, detail, date, tag, merchant, orderId, grouping, splitItems。category 必须属于：${categories.join(', ')}。
+每个 transactions 元素表示一笔真实、独立发生的消费，字段为 amount, category, description, detail, date, tag, merchant, orderId, grouping, splitItems。category 必须属于：${categories.join(', ')}。
 
 拆分原则：
 1. 不同日期、不同付款行为、不同订单号或语义上独立发生的消费，必须分别放入 transactions；绝不能把跨日期金额相加成一笔。
 2. 同一次结账或同一个订单里的商品明细，保留为一笔 transaction，并放入 splitItems，grouping 返回 folded。
 3. 盒马、沃尔玛、山姆及其他超市的一张小票/一次结账默认折叠为一笔，splitItems 逐商品列出。
 4. 淘宝/天猫：同一个订单的多个商品可折叠；订单列表中的多个订单、不同日期或多次实付款必须拆成多笔 transactions。
-5. 每笔交易的日期和支付方式都要从对应原句独立提取，不能把第一笔的支付方式复用到后续交易。
-6. splitItems 每项可包含 amount, category, description, detail, quantity, tag。父级 amount 是实际支付总额；优惠导致商品合计不同于实付时保留实付总额，并在 detail 说明。
-7. description 为 4 到 12 个中文字符左右的账单标题；date 必须为 YYYY-MM-DD。信息缺失时不要编造。
+5. 每笔交易的日期都要从对应原句独立提取；账本不保存支付方式，不要返回 paymentMethod。
+6. splitItems 每项只包含 amount, category, description, detail, quantity。父级 amount 是实际支付总额；优惠导致商品合计不同于实付时保留实付总额，并在 detail 说明。
+7. tag 是整笔交易可选的单一场景标签，只能返回 0 或 1 个短词；禁止数组、多个标签、逗号分隔和 # 前缀，也不能把商户、分类或支付方式当作标签。merchant 只在原文明确出现品牌或平台时填写。
+8. description 为 4 到 12 个中文字符左右的账单标题；date 必须为 YYYY-MM-DD。信息缺失时不要编造。
 
 AA 或多人分摊只记录用户最终承担的净支出，作为单笔 transaction 且不要生成 splitItems。若提供实际付款和回款，amount=付款-回款；只有明确平均 AA 且没有实际回款时才按人数平均。
 示例：“我付了 120，他转我 60”返回 60；“3 个人吃饭花了 300，是 AA 的”返回 100；“两人吃饭 163，我付的，他只转我 80”返回 83。

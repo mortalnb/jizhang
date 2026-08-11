@@ -14,7 +14,8 @@ const transactionSchema = z.object({
   amount: z.number().finite().nonnegative(),
   category: z.string().min(1).max(20),
   date: z.string().regex(/^20\d{2}-\d{2}-\d{2}$/),
-  paymentMethod: z.string().max(60),
+  // Kept optional for schema <=4 snapshots; schema 5 clients no longer emit it.
+  paymentMethod: z.string().max(60).optional(),
   description: z.string().min(1).max(200),
   detail: z.string().max(3000).optional(),
   recognition: z.object({
@@ -30,7 +31,7 @@ const transactionSchema = z.object({
 });
 
 export const ledgerPayloadSchema = z.object({
-  schemaVersion: z.number().int().min(1).max(100),
+  schemaVersion: z.number().int().min(1).max(5),
   settings: z.object({
     categories: z.array(z.string().min(1).max(20)).min(1).max(100),
     monthlyBudget: z.number().finite().nonnegative().max(100_000_000),
@@ -64,4 +65,3 @@ export const checksumLedgerPayload = (value: unknown) => {
   }
   return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 };
-

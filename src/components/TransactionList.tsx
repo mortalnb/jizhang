@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Calendar, CheckSquare, ChevronDown, ChevronUp, CreditCard, Pencil, Save, Search, ShoppingBag, Square, Tag, Trash2, X } from 'lucide-react';
+import { Calendar, CheckSquare, ChevronDown, ChevronUp, Pencil, Save, Search, ShoppingBag, Square, Tag, Trash2, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { formatShortDate } from '../services/date';
 import { storage } from '../services/storage';
@@ -14,6 +14,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
   const [settingsCategories] = useState(() => storage.getSettings().categories);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('全部');
+  const [selectedMerchant, setSelectedMerchant] = useState('全部商户');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Transaction | null>(null);
@@ -25,30 +26,36 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
     return Array.from(new Set([...settingsCategories, ...historicalCategories]));
   }, [list, settingsCategories]);
 
+  const merchants = useMemo(
+    () => Array.from(new Set(list.map(item => item.merchant).filter((merchant): merchant is string => Boolean(merchant)))).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [list],
+  );
+
   const filteredList = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return list.filter(item => {
-      const matchesCategory = selectedCategory === '全部' || item.category === selectedCategory;
+      const matchesCategory = selectedCategory === '全部' || item.category === selectedCategory || item.subItems?.some(subItem => subItem.category === selectedCategory);
+      const matchesMerchant = selectedMerchant === '全部商户' || item.merchant === selectedMerchant;
       const matchesSearch =
         !keyword ||
         item.description.toLowerCase().includes(keyword) ||
         item.detail?.toLowerCase().includes(keyword) ||
+        item.merchant?.toLowerCase().includes(keyword) ||
+        item.orderId?.toLowerCase().includes(keyword) ||
         item.subItems?.some(
           subItem =>
             subItem.description.toLowerCase().includes(keyword) ||
             subItem.detail?.toLowerCase().includes(keyword) ||
             subItem.quantity?.toLowerCase().includes(keyword) ||
             subItem.category.toLowerCase().includes(keyword) ||
-            subItem.amount.toString().includes(keyword) ||
-            subItem.tag?.toLowerCase().includes(keyword),
+            subItem.amount.toString().includes(keyword),
         ) ||
         item.category.toLowerCase().includes(keyword) ||
-        item.paymentMethod?.toLowerCase().includes(keyword) ||
         item.amount.toString().includes(keyword) ||
         item.tag?.toLowerCase().includes(keyword);
-      return matchesCategory && matchesSearch;
+      return matchesCategory && matchesMerchant && matchesSearch;
     });
-  }, [list, search, selectedCategory]);
+  }, [list, search, selectedCategory, selectedMerchant]);
 
   const grouped = useMemo(() => {
     return filteredList.reduce<Record<string, { items: Transaction[]; total: number }>>((acc, item) => {
@@ -162,7 +169,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
           <Search size={16} className="absolute left-3.5 text-dark-muted" />
           <input
             type="text"
-            placeholder="搜索备注、分类、标签或金额"
+            placeholder="搜索备注、商品、商户、订单号或金额"
             value={search}
             onChange={event => setSearch(event.target.value)}
             className="w-full text-xs bg-transparent rounded-xl pl-9 pr-8 py-3 focus:outline-none placeholder-dark-muted"
@@ -191,6 +198,17 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
             </button>
           ))}
         </div>
+
+        {merchants.length > 0 && (
+          <label className="glass-panel rounded-xl border border-black/[0.08] bg-white/50 px-3 py-2 flex items-center gap-2">
+            <ShoppingBag size={14} className="text-brand-purple shrink-0" />
+            <span className="text-[10px] text-dark-muted shrink-0">商户筛选</span>
+            <select aria-label="商户筛选" value={selectedMerchant} onChange={event => setSelectedMerchant(event.target.value)} className="min-w-0 flex-1 bg-transparent text-xs font-semibold focus:outline-none">
+              <option value="全部商户">全部商户</option>
+              {merchants.map(merchant => <option key={merchant} value={merchant}>{merchant}</option>)}
+            </select>
+          </label>
+        )}
 
         {managing && (
           <div className="glass-panel rounded-xl border border-black/[0.08] bg-white/50 p-2.5 flex items-center justify-between gap-2">
@@ -273,12 +291,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                               </div>
                               <div className="flex items-center gap-1.5 text-[10px] text-dark-muted">
                                 <span className="bg-black/[0.03] px-1.5 py-0.5 rounded border border-black/[0.05] shrink-0">{item.category}</span>
-                                {item.paymentMethod && (
-                                  <>
-                                    <span>·</span>
-                                    <span className="truncate">{item.paymentMethod}</span>
-                                  </>
-                                )}
+                                {item.merchant && <><span>·</span><span className="truncate">{item.merchant}</span></>}
                               </div>
                             </div>
                           </div>
@@ -319,25 +332,18 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                                           <span className="text-xs font-semibold truncate">{subItem.description}</span>
                                         </div>
                                         {editing ? (
-                                          <div className="grid grid-cols-2 gap-2">
+                                          <div>
                                             <EditSelect
                                               ariaLabel={`${subItem.description}分类`}
                                               categories={categories}
                                               value={subItem.category}
                                               onChange={category => updateSubItem(index, { category })}
                                             />
-                                            <EditInput
-                                              ariaLabel={`${subItem.description}标签`}
-                                              placeholder="标签（可选）"
-                                              value={subItem.tag ?? ''}
-                                              onChange={tag => updateSubItem(index, { tag: tag.trim() || undefined })}
-                                            />
                                           </div>
                                         ) : (
                                           <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-dark-muted">
                                             <span className="bg-black/[0.03] border border-black/[0.05] rounded px-1.5 py-0.5">{subItem.category}</span>
                                             {subItem.quantity && <span>{subItem.quantity}</span>}
-                                            {subItem.tag && <span>{subItem.tag}</span>}
                                           </div>
                                         )}
                                       </div>
@@ -372,14 +378,20 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                                     onChange={tag => setEditDraft({ ...displayItem, tag: tag.trim() || undefined })}
                                   />
                                 </EditField>
-                                {displayItem.paymentMethod && <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={displayItem.paymentMethod} />}
+                                <EditField label="商户">
+                                  <EditInput ariaLabel="账单商户" placeholder="商户（可选）" value={displayItem.merchant ?? ''} onChange={merchant => setEditDraft({ ...displayItem, merchant: merchant.trim() || undefined })} />
+                                </EditField>
+                                <EditField label="订单号">
+                                  <EditInput ariaLabel="账单订单号" placeholder="订单号（可选）" value={displayItem.orderId ?? ''} onChange={orderId => setEditDraft({ ...displayItem, orderId: orderId.trim() || undefined })} />
+                                </EditField>
                               </div>
                             ) : (
                               <div className="grid grid-cols-2 gap-2">
                                 <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类" value={`${getCategoryEmoji(item.category)} ${item.category}`} />
-                                {item.paymentMethod && <Detail icon={<CreditCard size={14} className="text-brand-cyan" />} label="支付方式" value={item.paymentMethod} />}
                                 <Detail icon={<Calendar size={14} className="text-brand-blue" />} label="日期" value={item.date} />
-                                <Detail icon={<Tag size={14} className="text-brand-purple" />} label="标签" value={item.tag ?? '无'} />
+                                <Detail icon={<Tag size={14} className="text-brand-purple" />} label="场景标签" value={item.tag ?? '无'} />
+                                {item.merchant && <Detail icon={<ShoppingBag size={14} className="text-brand-cyan" />} label="商户" value={item.merchant} />}
+                                {item.orderId && <Detail icon={<Tag size={14} className="text-brand-blue" />} label="订单号" value={item.orderId} />}
                               </div>
                             )}
                             <div className="flex justify-end gap-2 pt-1 border-t border-black/[0.05]">

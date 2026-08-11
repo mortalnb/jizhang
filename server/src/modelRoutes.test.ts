@@ -15,6 +15,7 @@ describe('batch transaction contract', () => {
     }, categories);
     expect(result.transactions).toHaveLength(2);
     expect(result.transactions.map(item => item.date)).toEqual(['2026-08-01', '2026-08-02']);
+    expect(result.transactions.every(item => !Object.hasOwn(item, 'paymentMethod'))).toBe(true);
   });
 
   it('keeps one supermarket checkout folded with paid total', () => {
@@ -36,6 +37,7 @@ describe('batch transaction contract', () => {
     expect(result.transactions).toHaveLength(1);
     expect(result.transactions[0].amount).toBe(36);
     expect(result.transactions[0].splitItems).toHaveLength(2);
+    expect(result.transactions[0]).not.toHaveProperty('paymentMethod');
   });
 
   it('states the non-negotiable split rules in the prompt', () => {
@@ -43,14 +45,16 @@ describe('batch transaction contract', () => {
     expect(prompt).toContain('绝不能把跨日期金额相加成一笔');
     expect(prompt).toContain('沃尔玛');
     expect(prompt).toContain('多个订单');
+    expect(prompt).toContain('只能返回 0 或 1 个短词');
+    expect(prompt).toContain('不要返回 paymentMethod');
   });
 });
 describe('ledger snapshot contract', () => {
   const payload = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     settings: { categories, monthlyBudget: 3000 },
     transactions: [{
-      id: 'tx-1', amount: 18, category: '饮料', date: '2026-08-01', paymentMethod: '', description: '咖啡',
+      id: 'tx-1', amount: 18, category: '饮料', date: '2026-08-01', description: '咖啡',
     }],
   };
 
@@ -63,6 +67,7 @@ describe('ledger snapshot contract', () => {
     const modelRoutes = readFileSync(new URL('./modelRoutes.ts', import.meta.url), 'utf8');
     const ledgerRoutes = readFileSync(new URL('./ledgerRoutes.ts', import.meta.url), 'utf8');
     expect(modelRoutes).toContain('/api/model/transcribe-audio');
+    expect(modelRoutes).toContain('/api/model/analyze-ledger');
     expect(modelRoutes).toContain("z.literal('mimo-v2.5-asr')");
     expect(ledgerRoutes).toContain('/api/ledger-snapshot');
   });

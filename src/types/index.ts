@@ -3,7 +3,6 @@ export interface Transaction {
   amount: number;
   category: string;
   date: string;
-  paymentMethod: string;
   description: string;
   detail?: string;
   recognition?: {
@@ -53,13 +52,11 @@ export interface SplitItem {
   description: string;
   detail?: string;
   quantity?: string;
-  tag?: string;
 }
 
 export interface ParsedTransaction {
   amount: number;
   category: string;
-  paymentMethod: string;
   description: string;
   detail?: string;
   date: string;

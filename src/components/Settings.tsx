@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle, Cloud, CloudDownload, CloudUpload, Cpu, Download, Globe, Key, Plus, RotateCcw, Save, ServerCog, Tag, Upload, Wallet, X } from 'lucide-react';
-import { exportBackup, parseBackup } from '../services/backup';
+import { exportBackup, parseBackup, type LedgerBackup } from '../services/backup';
 import { getCategoryEmoji } from '../data/categories';
 import { cloudApi } from '../services/cloudApi';
 import { cloudLedgerSync } from '../services/cloudLedgerSync';
@@ -24,6 +24,7 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'warn' } | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [pendingBackup, setPendingBackup] = useState<LedgerBackup | null>(null);
   const [syncState, setSyncState] = useState(() => storage.getCloudSyncState());
 
   useEffect(() => {
@@ -195,6 +196,19 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
     } finally { setCloudLoading(false); }
   };
 
+  const mergeCloudLedger = async () => {
+    if (!window.confirm('将云端缺失记录合并到本机，同 ID 记录保留本机版本，随后上传合并结果。继续吗？')) return;
+    setCloudLoading(true);
+    try {
+      const snapshot = await cloudLedgerSync.mergeFromCloud();
+      setSettings(storage.getSettings());
+      notify(`云端与本机已安全合并，当前云端第 ${snapshot.revision} 版。`);
+      onSettingsSaved();
+    } catch (caught) {
+      notify(caught instanceof Error ? `合并失败：${caught.message}` : '合并失败', 'warn');
+    } finally { setCloudLoading(false); }
+  };
+
   const runCloudDiagnostic = async () => {
     setCloudLoading(true);
     setCloudDiagnostic(null);
@@ -277,10 +291,22 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
     setBackupBusy(true);
     try {
       const backup = parseBackup(await file.text());
-      const mode = window.confirm(`备份含 ${backup.payload.transactions.length} 笔账目。确定覆盖恢复吗？选择“取消”将合并导入。`) ? 'replace' : 'merge';
-      const count = storage.restoreBackup(backup, mode);
+      setPendingBackup(backup);
+      notify(`已校验备份，共 ${backup.payload.transactions.length} 笔；请选择安全导入方式。`);
+    } catch (error) {
+      notify(error instanceof Error ? `导入失败：${error.message}` : '导入失败', 'warn');
+    } finally { setBackupBusy(false); }
+  };
+
+  const applyPendingBackup = (mode: 'replace' | 'merge') => {
+    if (!pendingBackup) return;
+    if (mode === 'replace' && !window.confirm('覆盖恢复会用该备份替换当前账本，备份之后新增的记录将不再显示。应用会先保存恢复快照，仍要继续吗？')) return;
+    setBackupBusy(true);
+    try {
+      const count = storage.restoreBackup(pendingBackup, mode);
       setSettings(storage.getSettings());
-      notify(`${mode === 'replace' ? '已恢复' : '已合并'} ${count} 笔账目${backup.recoveredLegacyChecksum ? '；旧版校验缺陷已安全迁移' : ''}。`);
+      notify(`${mode === 'replace' ? '已覆盖恢复' : '已保留现有记录并合并'}，当前共 ${count} 笔${pendingBackup.recoveredLegacyChecksum ? '；旧版校验缺陷已安全迁移' : ''}。`);
+      setPendingBackup(null);
       onSettingsSaved();
     } catch (error) {
       notify(error instanceof Error ? `导入失败：${error.message}` : '导入失败', 'warn');
@@ -422,9 +448,12 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
             {syncState.error ? <><br /><span className="text-amber-700">{syncState.error}</span></> : null}
           </div>
           {settings.cloudSyncEnabled && (
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={uploadLocalLedger} disabled={cloudLoading || !cloudSession} className="py-2.5 rounded-xl bg-brand-purple text-white text-[10px] font-bold disabled:opacity-50 flex items-center justify-center gap-1.5"><CloudUpload size={14} />用本机覆盖云端</button>
-              <button type="button" onClick={restoreCloudLedger} disabled={cloudLoading || !cloudSession} className="py-2.5 rounded-xl border border-brand-purple/25 text-brand-purple text-[10px] font-bold disabled:opacity-50 flex items-center justify-center gap-1.5"><CloudDownload size={14} />从云端恢复本机</button>
+            <div className="space-y-2">
+              <button type="button" onClick={mergeCloudLedger} disabled={cloudLoading || !cloudSession} className="w-full py-2.5 rounded-xl bg-brand-purple text-white text-[10px] font-bold disabled:opacity-50 flex items-center justify-center gap-1.5"><CloudDownload size={14} />合并云端与本机（推荐）</button>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={uploadLocalLedger} disabled={cloudLoading || !cloudSession} className="py-2.5 rounded-xl border border-brand-rose/25 text-brand-rose text-[10px] font-bold disabled:opacity-50 flex items-center justify-center gap-1.5"><CloudUpload size={14} />用本机覆盖云端</button>
+                <button type="button" onClick={restoreCloudLedger} disabled={cloudLoading || !cloudSession} className="py-2.5 rounded-xl border border-brand-rose/25 text-brand-rose text-[10px] font-bold disabled:opacity-50 flex items-center justify-center gap-1.5"><CloudDownload size={14} />从云端覆盖本机</button>
+              </div>
             </div>
           )}
         </Panel>
@@ -475,7 +504,17 @@ export function Settings({ onSettingsSaved }: SettingsProps) {
         <Panel icon={<Download size={18} className="text-brand-purple" />} title="账本备份与恢复">
           <p className="text-[11px] text-dark-muted leading-relaxed">导出包含账单、拆单、分类和预算，不包含 API Key、云端 token 或设备标识。应用会在写入前创建恢复快照；仍建议定期导出到手机文档目录。</p>
           <button type="button" onClick={exportLedger} disabled={backupBusy} className="w-full py-2.5 rounded-xl bg-brand-purple text-white text-xs font-bold disabled:opacity-50 flex items-center justify-center gap-2"><Download size={14} />{backupBusy ? '正在处理备份' : '导出账本备份'}</button>
-          <label className="w-full py-2.5 rounded-xl bg-black/[0.02] border border-black/[0.08] text-xs font-bold text-brand-purple flex items-center justify-center gap-2 cursor-pointer"><Upload size={14} />导入账本备份<input type="file" accept="application/json,.json" className="hidden" onChange={event => void importLedger(event.target.files?.[0])} /></label>
+          <label className="w-full py-2.5 rounded-xl bg-black/[0.02] border border-black/[0.08] text-xs font-bold text-brand-purple flex items-center justify-center gap-2 cursor-pointer"><Upload size={14} />导入账本备份<input type="file" accept="application/json,.json" className="hidden" onChange={event => { void importLedger(event.target.files?.[0]); event.target.value = ''; }} /></label>
+          {pendingBackup && (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 space-y-2">
+              <p className="text-[11px] text-dark-text leading-relaxed">已校验 {pendingBackup.payload.transactions.length} 笔。当前设备可能已有更新记录，推荐合并；同 ID 记录保留当前版本，备份中缺少的记录会补入。</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => applyPendingBackup('merge')} className="py-2 rounded-lg bg-brand-purple text-white text-[10px] font-bold">合并并保留现有（推荐）</button>
+                <button type="button" onClick={() => applyPendingBackup('replace')} className="py-2 rounded-lg border border-brand-rose/25 text-brand-rose text-[10px] font-bold">覆盖恢复</button>
+              </div>
+              <button type="button" onClick={() => setPendingBackup(null)} className="w-full py-1.5 text-[10px] text-dark-muted">取消导入</button>
+            </div>
+          )}
         </Panel>
 
         <div className="flex flex-col gap-3">

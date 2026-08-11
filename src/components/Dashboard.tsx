@@ -3,23 +3,13 @@ import { AlertCircle, Calendar, ChartPie, ClipboardList, Loader2, ShieldCheck, T
 import { CATEGORY_COLORS, getCategoryEmoji, getCategoryGradient } from '../data/categories';
 import { formatShortDate, monthKey, todayISO } from '../services/date';
 import { buildLocalInsights, generateFinancialInsights, type InsightResult } from '../services/financialInsights';
+import { ledgerItemsForStats, tagCoverage } from '../services/ledgerAnalytics';
 import { storage } from '../services/storage';
 import type { Transaction } from '../types';
 
 type DashboardView = 'overview' | 'category' | 'calendar';
 
 const PIE_COLORS = ['#4f46e5', '#0284c7', '#059669', '#d97706', '#e11d48', '#7c3aed', '#0f766e', '#64748b'];
-
-const categoryLedgerItems = (transactions: Transaction[]) =>
-  transactions.flatMap(item =>
-    item.subItems?.length
-      ? item.subItems.map(subItem => ({
-          amount: subItem.amount,
-          category: subItem.category,
-          tag: subItem.tag ?? item.tag,
-        }))
-      : [{ amount: item.amount, category: item.category, tag: item.tag }],
-  );
 
 export function Dashboard() {
   const [view, setView] = useState<DashboardView>('overview');
@@ -46,7 +36,7 @@ export function Dashboard() {
   const maxWeek = Math.max(...weeklyData, 1);
 
   const categoryRows = useMemo(() => {
-    const ledgerItems = categoryLedgerItems(monthTransactions);
+    const ledgerItems = ledgerItemsForStats(monthTransactions);
     return Object.entries(
       ledgerItems.reduce<Record<string, number>>((acc, item) => {
         acc[item.category] = (acc[item.category] ?? 0) + item.amount;
@@ -58,7 +48,8 @@ export function Dashboard() {
   }, [monthTransactions]);
 
   const tagRows = useMemo(() => {
-    const ledgerItems = categoryLedgerItems(monthTransactions);
+    if (tagCoverage(monthTransactions) < 0.4) return [];
+    const ledgerItems = ledgerItemsForStats(monthTransactions);
     return Object.entries(
       ledgerItems.reduce<Record<string, number>>((acc, item) => {
         if (!item.tag) return acc;
@@ -430,7 +421,7 @@ function DayDetailSheet({ date, items, onClose, total }: { date: string; items: 
                 <div className="min-w-0">
                   <p className="text-xs font-bold truncate">{item.description}</p>
                   <p className="text-[10px] text-dark-muted truncate">
-                    {item.category} · {item.paymentMethod}
+                    {item.category}{item.tag ? ` · ${item.tag}` : ''}
                   </p>
                 </div>
               </div>

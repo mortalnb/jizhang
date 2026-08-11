@@ -2,19 +2,28 @@ import { z } from 'zod';
 
 const optionalText = (max: number) => z.preprocess(value => typeof value === 'string' && value.trim() ? value : undefined, z.string().max(max).optional());
 
+const scenarioTag = (value: unknown) => {
+  const first = (Array.isArray(value) ? value : [value])
+    .filter((item): item is string => typeof item === 'string')
+    .flatMap(item => item.split(/[,，;；|/]+/))
+    .map(item => item.trim().replace(/^#+\s*/, ''))
+    .find(item => item && !/^(?:未指定|none|null|undefined|\[\]|\{\})$/i.test(item));
+  if (!first) return undefined;
+  const aliases: Record<string, string> = { 盒马采购: '超市采购', 盒马周购: '超市采购', 淘宝网购: '网购', 网购订单: '网购', 火车票: '火车出行', 软件订阅: '订阅' };
+  return (aliases[first] ?? first).slice(0, 40);
+};
+
 const splitItemSchema = z.object({
   amount: z.coerce.number().finite().nonnegative(),
   category: z.string().min(1).max(20),
   description: z.string().min(1).max(120),
   detail: optionalText(1000),
   quantity: optionalText(80),
-  tag: optionalText(40),
 });
 
 const transactionSchema = z.object({
   amount: z.coerce.number().finite().nonnegative(),
   category: z.string().min(1).max(20),
-  paymentMethod: z.preprocess(value => typeof value === 'string' ? value : '', z.string().max(40)),
   description: z.string().min(1).max(120),
   detail: optionalText(1500),
   date: z.string().regex(/^20\d{2}-\d{2}-\d{2}$/),
@@ -59,7 +68,7 @@ const normalizeLooseTransaction = (value: unknown, categories: string[]) => {
     amount: value.amount ?? value.paidAmount ?? value.total,
     category,
     description: firstText(value, ['description', 'title', 'merchant']) ?? '消费记录',
-    paymentMethod: firstText(value, ['paymentMethod', 'payment']) ?? '',
+    tag: scenarioTag(value.tag),
     splitItems,
   };
 };
@@ -92,20 +101,22 @@ export const normalizeVisionBatch = (value: unknown, categories: string[]) => {
 };
 
 export const buildTransactionPrompt = (categories: string[], today: string) => `你是记账助手。只返回一个 JSON 对象，最外层格式固定为 {"transactions":[...],"warnings":[]}。
-每个 transactions 元素表示一笔真实、独立发生的消费，字段为 amount, category, paymentMethod, description, detail, date, tag, merchant, orderId, grouping, splitItems。category 必须属于：${categories.join(', ')}。
+每个 transactions 元素表示一笔真实、独立发生的消费，字段为 amount, category, description, detail, date, tag, merchant, orderId, grouping, splitItems。category 必须属于：${categories.join(', ')}。
 不同日期、不同付款行为、不同订单号或语义上独立发生的消费必须分别放入 transactions，绝不能把跨日期金额相加成一笔。
 同一次结账或同一个订单里的商品明细保留为一笔 transaction，并放入 splitItems，grouping=folded。
 盒马、沃尔玛、山姆及其他超市的一张小票/一次结账默认折叠为一笔；淘宝/天猫同一订单可折叠，多个订单、不同日期或多次实付款必须拆成多笔。
-每笔交易的日期和支付方式都要从对应原句独立提取，不能把第一笔的支付方式复用到后续交易。
+每笔交易的日期都要从对应原句独立提取。账本不保存支付方式，不要返回 paymentMethod。
 父级 amount 是实际支付总额；优惠导致商品合计不同于实付时保留实付总额并在 detail 说明。date 必须为 YYYY-MM-DD；信息缺失不要编造。
+tag 是整笔交易可选的单一场景标签，只能返回 0 或 1 个短词；禁止数组、多个标签、逗号分隔和 # 前缀，也不能把商户、分类或支付方式当作标签。splitItems 不要包含 tag。merchant 只在原文明确出现品牌或平台时填写。
 AA 或多人分摊只记录用户最终承担净支出，作为单笔 transaction 且不要生成 splitItems。若有实际付款和回款，amount=付款-回款；只有明确平均 AA 且没有实际回款时才按人数平均。
 示例：“我付了 120，他转我 60”返回 60；“3 个人吃饭花了 300，是 AA 的”返回 100；“两人吃饭 163，我付的，他只转我 80”返回 83。
 今天是 ${today}。`;
 
 export const buildVisionPrompt = (categories: string[], today: string) =>
   `你是记账截图识别助手。只返回 JSON，最外层字段：source, sourceLabel, amount, transactions, warnings。` +
-  `transactions 每笔字段：amount, category, paymentMethod, description, detail, date, tag, merchant, orderId, grouping, splitItems；splitItems 每项字段：amount, category, description, detail, quantity, tag。` +
+  `transactions 每笔字段：amount, category, description, detail, date, tag, merchant, orderId, grouping, splitItems；不要返回 paymentMethod；splitItems 每项字段：amount, category, description, detail, quantity。` +
   `category 必须属于：${categories.join(', ')}。` +
   `盒马、沃尔玛、山姆或其他超市的一张小票/一次结账必须返回一笔 transaction，grouping=folded，逐商品放入 splitItems；父级 amount 是优惠后的实际支付总额，quantity 保留数量和单位。` +
   `淘宝/天猫同一订单的商品可折叠；订单列表中的多个订单、不同日期或多次实付款必须返回多笔 transactions，绝不能合并金额。` +
+  `tag 是整笔交易可选的单一场景标签，只能返回 0 或 1 个短词，禁止数组、逗号分隔和 # 前缀；merchant 只填明确可见的品牌或平台。` +
   `看不到的字段留空，不得编造。今天是 ${today}。`;

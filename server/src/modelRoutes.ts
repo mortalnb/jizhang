@@ -32,6 +32,27 @@ const audioSchema = z.object({
 });
 
 const capabilitySchema = z.object({ model: modelSchema });
+const analysisObject = z.record(z.string().max(80), z.unknown());
+const ledgerAnalysisSchema = z.object({
+  financialFacts: analysisObject,
+  model: modelSchema,
+  monthSummaries: z.array(analysisObject).max(12),
+  recentTransactions: z.array(z.object({
+    amount: z.number().finite().nonnegative(),
+    category: z.string().min(1).max(20),
+    date: z.string().regex(/^20\d{2}-\d{2}-\d{2}$/),
+    description: z.string().min(1).max(120),
+    tag: z.string().max(40).optional(),
+  })).max(30),
+  requirements: z.array(z.string().min(1).max(240)).min(1).max(12),
+});
+const insightResultSchema = z.object({
+  insights: z.array(z.object({
+    body: z.string().min(1).max(180),
+    title: z.string().min(1).max(24),
+    tone: z.enum(['info', 'warn', 'success']),
+  })).min(1).max(5),
+});
 
 const parseModelJson = (payload: unknown) => JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
 
@@ -120,6 +141,35 @@ export const registerModelRoutes = (app: FastifyInstance) => {
       return { result: { text } };
     } catch (error) {
       await recordUsage({ audioSeconds: Math.ceil(input.durationSeconds), durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
+      throw error;
+    }
+  });
+
+  app.post('/api/model/analyze-ledger', { preHandler: requireAuth }, async request => {
+    const auth = (request as AuthenticatedRequest).auth;
+    const input = ledgerAnalysisSchema.parse(request.body);
+    const endpoint = 'analyze-ledger';
+    await assertModelAccess(auth.userId, input.model, endpoint);
+    const startedAt = Date.now();
+    try {
+      const payload = await withModelSlot('text', () => callMimoChat({
+        model: input.model,
+        temperature: 0.2,
+        max_completion_tokens: 2048,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: '你是私人记账分析助手。只允许引用输入 JSON 中明确存在的数据，不估算、不补全、不编造。禁止把不完整月份与完整月份直接比较，不分析商户，不推断消费动机、因果或价值判断。必须返回 JSON：{"insights":[{"title":"短标题","body":"一句具体分析或建议","tone":"info|warn|success"}]}。',
+          },
+          { role: 'user', content: JSON.stringify({ financialFacts: input.financialFacts, monthSummaries: input.monthSummaries, recentTransactions: input.recentTransactions, requirements: input.requirements }) },
+        ],
+      }));
+      const result = validated(() => insightResultSchema.parse(parseModelJson(payload)));
+      await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
+      return { result };
+    } catch (error) {
+      await recordUsage({ durationMs: Date.now() - startedAt, endpoint, errorCode: error instanceof AppError ? error.code : 'internal_error', model: input.model, success: false, userId: auth.userId });
       throw error;
     }
   });

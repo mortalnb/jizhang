@@ -2,6 +2,7 @@ import { CapacitorPluginMlKitTextRecognition } from '@pantrist/capacitor-plugin-
 import type { AppSettings, ParsedBatch, ParsedTransaction, SplitItem } from '../types';
 import { cloudApi } from './cloudApi';
 import { todayISO } from './date';
+import { normalizeMerchant, normalizeScenarioTag } from './ledgerNormalization';
 import { storage } from './storage';
 
 export type BillSource = 'hema' | 'walmart' | 'taobao' | 'generic';
@@ -591,17 +592,16 @@ const coordinateItemsToParsed = (
     description: itemTitle(item.description, item.quantity),
     detail: `${sourceLabel}坐标解析：${item.description}，数量 ${item.quantity}，金额 ¥${item.amount.toFixed(2)}。`,
     quantity: source === 'hema' ? item.quantity : undefined,
-    tag: source === 'taobao' ? '#淘宝网购' : '#盒马周购',
   }));
   const total = normalizeAmount(String(splitItems.reduce((sum, item) => sum + item.amount, 0)));
   return {
     amount: total,
     category: source === 'taobao' ? knownCategory(categories, '其他') : knownCategory(categories, '餐费'),
-    paymentMethod: source === 'generic' ? '' : '支付宝',
     description: source === 'taobao' ? '淘宝天猫订单拆单' : '盒马鲜生周购拆单',
     detail: coordinate.detailNote ?? coordinateDetailNote(sourceLabel, splitItems.length, total, coordinate.paidTotal),
     date: todayISO(),
-    tag: source === 'taobao' ? '#淘宝网购' : '#盒马周购',
+    tag: source === 'taobao' ? '网购' : '超市采购',
+    merchant: source === 'taobao' ? '淘宝/天猫' : '盒马',
     splitItems,
   };
 };
@@ -626,7 +626,6 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
       description: title,
       detail: billDetail('盒马鲜生', description, amount, quantity),
       quantity,
-      tag: '#盒马周购',
     });
   }
 
@@ -638,7 +637,6 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
         description: itemTitle(item.description, item.quantity),
         detail: billDetail('盒马鲜生', item.description, item.amount, item.quantity),
         quantity: item.quantity,
-        tag: '#盒马周购',
       });
     }
   }
@@ -647,11 +645,11 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
   return {
     amount: total,
     category: categories.includes('餐费') ? '餐费' : categories[0],
-    paymentMethod: '支付宝',
     description: '盒马鲜生周购拆单',
     detail: `盒马鲜生截图自动拆单，共识别 ${splitItems.length} 个商品项目，总金额 ¥${total.toFixed(2)}。`,
     date: todayISO(),
-    tag: '#盒马周购',
+    tag: '超市采购',
+    merchant: '盒马',
     splitItems,
   };
 };
@@ -661,7 +659,6 @@ const parseWalmart = (rawText: string, categories: string[]): ParsedTransaction 
   const splitItems = parsed.splitItems?.map(item => ({
     ...item,
     detail: item.detail?.replace(/盒马鲜生/g, '沃尔玛/山姆'),
-    tag: '#超市采购',
   }));
   const dominant = splitItems
     ? Object.entries(splitItems.reduce<Record<string, number>>((totals, item) => {
@@ -674,7 +671,8 @@ const parseWalmart = (rawText: string, categories: string[]): ParsedTransaction 
     category: dominant ?? parsed.category,
     description: '沃尔玛超市采购',
     detail: parsed.detail?.replace(/盒马鲜生/g, '沃尔玛/山姆'),
-    tag: '#超市采购',
+    tag: '超市采购',
+    merchant: /山姆/.test(rawText) ? '山姆' : '沃尔玛',
     splitItems,
   };
 };
@@ -697,7 +695,6 @@ const parseTaobao = (rawText: string, categories: string[]): ParsedTransaction =
       category: categoryFor(description, categories),
       description: isDuplicateSummary ? description : description,
       detail: billDetail('淘宝/天猫', description, amount),
-      tag: '#淘宝网购',
     });
   }
 
@@ -705,11 +702,11 @@ const parseTaobao = (rawText: string, categories: string[]): ParsedTransaction =
   return {
     amount: total,
     category: categories.includes('其他') ? '其他' : categories[categories.length - 1],
-    paymentMethod: '支付宝',
     description: '淘宝天猫订单拆单',
     detail: `淘宝/天猫截图自动拆单，共识别 ${splitItems.length} 个订单项目，总金额 ¥${total.toFixed(2)}。`,
     date: todayISO(),
-    tag: '#淘宝网购',
+    tag: '网购',
+    merchant: /天猫|天貓/.test(rawText) ? '天猫' : '淘宝',
     splitItems,
   };
 };
@@ -722,7 +719,6 @@ const parseGeneric = (rawText: string, categories: string[]): ParsedTransaction 
   return {
     amount,
     category: fallback,
-    paymentMethod: '',
     description: normalized.slice(0, 18) || '截图待确认',
     detail: hasReliableAmount
       ? `普通截图账单识别到可信金额 ¥${amount.toFixed(2)}，请确认分类和备注。`
@@ -776,7 +772,8 @@ interface MimoVisionResult {
   date?: string;
   description?: string;
   detail?: string;
-  paymentMethod?: string;
+  merchant?: string;
+  orderId?: string;
   source?: BillSource | string;
   sourceLabel?: string;
   splitItems?: MimoVisionSplitItem[];
@@ -837,14 +834,13 @@ const sourceFromVision = (parsed: MimoVisionResult): BillSource => {
 };
 
 const inferBillTag = (text: string, source: BillSource) => {
-  if (/牛奶|酸奶|乳|豆浆|咖啡|茶|饮料|汽水|啤酒|酒|水杯|冰杯|矿泉水|果汁/i.test(text)) return '#饮品补给';
-  if (/鸡蛋|蛋|虾|鱼|牛肉|猪肉|鸡肉|肉|水饺|馒头|面包|米饭|熟食|冰淇淋|零食|水果|番茄|金果|葡萄|蒜/i.test(text)) return '#家庭餐食';
-  if (/洗发|沐浴|清洁|纸巾|牙膏|牙刷|湿巾|洗衣/i.test(text)) return '#日用补给';
-  if (/拖鞋|鞋|衣|裤|袜|帽|服饰/i.test(text)) return '#衣物鞋履';
-  if (/检测|查重|服务|会员|Turnitin/i.test(text)) return '#线上服务';
-  if (source === 'hema') return '#盒马采购';
-  if (source === 'walmart') return '#超市采购';
-  if (source === 'taobao') return '#网购订单';
+  if (source === 'hema' || source === 'walmart') return '超市采购';
+  if (source === 'taobao') return '网购';
+  if (/牛奶|酸奶|乳|豆浆|咖啡|茶|饮料|汽水|啤酒|酒|水杯|冰杯|矿泉水|果汁/i.test(text)) return '饮品补给';
+  if (/鸡蛋|蛋|虾|鱼|牛肉|猪肉|鸡肉|肉|水饺|馒头|面包|米饭|熟食|冰淇淋|零食|水果|番茄|金果|葡萄|蒜/i.test(text)) return '家庭餐食';
+  if (/洗发|沐浴|清洁|纸巾|牙膏|牙刷|湿巾|洗衣/i.test(text)) return '日用补给';
+  if (/拖鞋|鞋|衣|裤|袜|帽|服饰/i.test(text)) return '衣物鞋履';
+  if (/检测|查重|服务|会员|Turnitin/i.test(text)) return '线上服务';
   return undefined;
 };
 
@@ -858,7 +854,6 @@ const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], s
       const sourceText = `${itemDescription ?? ''} ${item.detail ?? ''} ${item.category ?? ''}`;
       const category = normalizeRemoteCategory(item.category, sourceText, categories);
       const quantity = isGrocery ? item.quantity?.replace(/\s+/g, ' ').trim() : undefined;
-      const tag = item.tag ?? inferBillTag(sourceText, source) ?? parsed.tag;
       if (isGrocery && !quantity) warnings.push(`${itemDescription ?? category} 缺少数量单位`);
       return {
         amount: Number(amount.toFixed(2)),
@@ -866,7 +861,6 @@ const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], s
         description: (itemDescription || `${category}支出`).replace(/\s+/g, ' ').trim().slice(0, 32),
         detail: item.detail || `${itemDescription ?? category}${quantity ? `，数量${quantity}` : '，数量需核对'}，金额¥${amount.toFixed(2)}。`,
         quantity,
-        tag,
       } satisfies SplitItem;
     })
     .filter(item => item.amount > 0 && item.description);
@@ -891,16 +885,16 @@ const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], s
   return {
     amount: Number(amount.toFixed(2)),
     category,
-    paymentMethod: parsed.paymentMethod?.trim() ?? '',
     description,
     detail:
       `${parsed.detail || `MiMo 多模态识别截图，${splitItems?.length ? `共拆出 ${splitItems.length} 个项目` : `识别金额 ¥${amount.toFixed(2)}`}。`}${
         warnings.length ? ` 需核对：${warnings.join('；')}。` : ' 已通过基础金额校验。'
       }`,
     date: parsed.date || todayISO(),
-    tag: parsed.tag ?? inferBillTag(`${description} ${parsed.detail ?? ''}`, source),
+    tag: source === 'hema' || source === 'walmart' ? '超市采购' : source === 'taobao' ? '网购' : normalizeScenarioTag(parsed.tag) ?? inferBillTag(`${description} ${parsed.detail ?? ''}`, source),
     splitItems: splitItems && splitItems.length > 1 ? splitItems : undefined,
-    merchant: source === 'hema' ? '盒马鲜生' : source === 'walmart' ? '沃尔玛/山姆' : undefined,
+    merchant: normalizeMerchant({ description, detail: parsed.detail, merchant: parsed.merchant ?? (source === 'hema' ? '盒马' : source === 'walmart' ? '沃尔玛/山姆' : source === 'taobao' ? '淘宝/天猫' : undefined) }),
+    orderId: parsed.orderId?.trim() || undefined,
     grouping: splitItems && splitItems.length > 1 ? 'folded' : 'separate',
   };
 };
@@ -922,7 +916,6 @@ const normalizeVisionBatch = (parsed: MimoVisionResult, categories: string[], de
           category: transaction.category,
           description: transaction.description,
           detail: transaction.detail,
-          tag: transaction.tag,
         }],
   );
   const paidAmount = Number(parsed.amount) || Number(normalized.reduce((sum, transaction) => sum + transaction.amount, 0).toFixed(2));
@@ -935,12 +928,11 @@ const normalizeVisionBatch = (parsed: MimoVisionResult, categories: string[], de
     transactions: [{
       amount: paidAmount,
       category,
-      paymentMethod: normalized.find(transaction => transaction.paymentMethod)?.paymentMethod ?? '',
       description: detectedSource === 'hema' ? '盒马鲜生订单' : '沃尔玛超市采购',
       detail: `同一次超市结账已折叠，共 ${splitItems.length} 个商品明细，实付 ¥${paidAmount.toFixed(2)}。`,
       date: normalized[0]?.date ?? todayISO(),
-      tag: detectedSource === 'hema' ? '#盒马采购' : '#超市采购',
-      merchant: detectedSource === 'hema' ? '盒马鲜生' : '沃尔玛/山姆',
+      tag: '超市采购',
+      merchant: detectedSource === 'hema' ? '盒马' : normalizeMerchant({ description: normalized.map(transaction => transaction.description).join(' '), merchant: '沃尔玛/山姆' }),
       grouping: 'folded',
       splitItems,
     }],
@@ -988,15 +980,15 @@ const recognizeWithMimoVision = async (file: File, categories: string[], setting
             role: 'system',
             content:
               `你是记账截图识别助手。只返回 JSON，最外层字段：source, sourceLabel, amount, transactions, warnings。` +
-              `transactions 中每笔字段：amount, category, paymentMethod, description, detail, date, tag, merchant, orderId, grouping, splitItems。` +
-              `splitItems 每项字段：amount, category, description, detail, quantity, tag。` +
+              `transactions 中每笔字段：amount, category, description, detail, date, tag, merchant, orderId, grouping, splitItems；不要返回 paymentMethod。` +
+              `splitItems 每项字段：amount, category, description, detail, quantity。` +
               `category 必须属于：${categories.join(', ')}。` +
               `description 是账单列表显示的凝练标题；detail 是稍微详细的识别依据。` +
               `盒马、沃尔玛、山姆或其他超市的一张小票/一次结账必须返回一笔 transaction，grouping=folded，逐商品放入 splitItems；父级 amount 是优惠后的实际支付总额。quantity 必须包含具体数量和单位，例如“3杯”“1袋”“950ml 1盒”。` +
               `淘宝/天猫同一个订单的商品可折叠在 splitItems；订单列表中的多个订单、不同日期或多次实付款必须返回多笔 transactions，绝不能合并金额。` +
               `饮料、咖啡、牛奶、酒水归“饮料”；饭菜、生鲜、水果、零食、冰淇淋、熟食归“餐费”；清洁洗护归“日用”；鞋服归“服饰”。` +
-              `tag 请提炼简短账目标签，例如 #饮品补给、#家庭餐食、#日用补给、#衣物鞋履、#线上服务、#盒马采购、#网购订单。` +
-              `支付方式看不到时返回空字符串。今天是 ${todayISO()}。`,
+              `tag 是整笔交易可选的单一场景标签，只能返回 0 或 1 个短词，禁止数组、逗号分隔和 # 前缀；商户名写入 merchant，不要写进 tag。` +
+              `今天是 ${todayISO()}。`,
           },
           {
             role: 'user',
