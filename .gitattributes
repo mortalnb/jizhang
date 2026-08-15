@@ -4,3 +4,7 @@
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
 *.sh text eol=lf
+
+# Capacitor rewrites these generated Gradle files with LF on every sync.
+android/app/capacitor.build.gradle text eol=lf
+android/capacitor.settings.gradle text eol=lf
