@@ -2,6 +2,7 @@ import { CapacitorPluginMlKitTextRecognition } from '@pantrist/capacitor-plugin-
 import type { AppSettings, ParsedBatch, ParsedTransaction, SplitItem } from '../types';
 import { cloudApi } from './cloudApi';
 import { todayISO } from './date';
+import { categoryForFoldedParent } from './foldedCategories';
 import { normalizeMerchant, normalizeScenarioTag } from './ledgerNormalization';
 import { storage } from './storage';
 
@@ -644,7 +645,7 @@ const parseHema = (rawText: string, categories: string[]): ParsedTransaction => 
   const total = normalizeAmount(String(splitItems.reduce((sum, item) => sum + item.amount, 0)));
   return {
     amount: total,
-    category: categories.includes('餐费') ? '餐费' : categories[0],
+    category: categoryForFoldedParent(splitItems, categories.includes('餐费') ? '餐费' : categories[0]),
     description: '盒马鲜生周购拆单',
     detail: `盒马鲜生截图自动拆单，共识别 ${splitItems.length} 个商品项目，总金额 ¥${total.toFixed(2)}。`,
     date: todayISO(),
@@ -660,15 +661,9 @@ const parseWalmart = (rawText: string, categories: string[]): ParsedTransaction 
     ...item,
     detail: item.detail?.replace(/盒马鲜生/g, '沃尔玛/山姆'),
   }));
-  const dominant = splitItems
-    ? Object.entries(splitItems.reduce<Record<string, number>>((totals, item) => {
-        totals[item.category] = (totals[item.category] ?? 0) + item.amount;
-        return totals;
-      }, {})).sort(([, left], [, right]) => right - left)[0]?.[0]
-    : undefined;
   return {
     ...parsed,
-    category: dominant ?? parsed.category,
+    category: categoryForFoldedParent(splitItems, parsed.category),
     description: '沃尔玛超市采购',
     detail: parsed.detail?.replace(/盒马鲜生/g, '沃尔玛/山姆'),
     tag: '超市采购',
@@ -701,7 +696,7 @@ const parseTaobao = (rawText: string, categories: string[]): ParsedTransaction =
   const total = normalizeAmount(String(splitItems.reduce((sum, item) => sum + item.amount, 0)));
   return {
     amount: total,
-    category: categories.includes('其他') ? '其他' : categories[categories.length - 1],
+    category: categoryForFoldedParent(splitItems, categories.includes('其他') ? '其他' : categories[categories.length - 1]),
     description: '淘宝天猫订单拆单',
     detail: `淘宝/天猫截图自动拆单，共识别 ${splitItems.length} 个订单项目，总金额 ¥${total.toFixed(2)}。`,
     date: todayISO(),
@@ -872,12 +867,8 @@ const normalizeVisionResult = (parsed: MimoVisionResult, categories: string[], s
     warnings.push(`实付 ¥${parsedAmount.toFixed(2)} 与商品明细合计 ¥${itemTotal.toFixed(2)} 不一致，已保留实付金额`);
   }
   const categoryText = `${parsed.category ?? ''} ${parsed.description ?? ''} ${parsed.detail ?? ''}`;
-  const categoryTotals = splitItems?.reduce<Record<string, number>>((totals, item) => {
-    totals[item.category] = (totals[item.category] ?? 0) + item.amount;
-    return totals;
-  }, {});
-  const dominantCategory = categoryTotals ? Object.entries(categoryTotals).sort(([, left], [, right]) => right - left)[0]?.[0] : undefined;
-  const category = isGrocery ? dominantCategory ?? knownCategory(categories, '餐费') : normalizeRemoteCategory(parsed.category, categoryText, categories);
+  const fallbackCategory = isGrocery ? knownCategory(categories, '餐费') : normalizeRemoteCategory(parsed.category, categoryText, categories);
+  const category = categoryForFoldedParent(splitItems, fallbackCategory);
   const description =
     (source === 'hema' ? '盒马鲜生订单' : source === 'walmart' ? '沃尔玛超市采购' : parsed.description?.replace(/\s+/g, ' ').trim().slice(0, 24)) ||
     (source === 'taobao' ? '淘宝天猫订单' : '截图账单识别');
@@ -919,11 +910,7 @@ const normalizeVisionBatch = (parsed: MimoVisionResult, categories: string[], de
         }],
   );
   const paidAmount = Number(parsed.amount) || Number(normalized.reduce((sum, transaction) => sum + transaction.amount, 0).toFixed(2));
-  const categoryTotals = splitItems.reduce<Record<string, number>>((totals, item) => {
-    totals[item.category] = (totals[item.category] ?? 0) + item.amount;
-    return totals;
-  }, {});
-  const category = Object.entries(categoryTotals).sort(([, left], [, right]) => right - left)[0]?.[0] ?? knownCategory(categories, '其他');
+  const category = categoryForFoldedParent(splitItems, knownCategory(categories, '其他'));
   return {
     transactions: [{
       amount: paidAmount,
@@ -984,7 +971,7 @@ const recognizeWithMimoVision = async (file: File, categories: string[], setting
               `splitItems 每项字段：amount, category, description, detail, quantity。` +
               `category 必须属于：${categories.join(', ')}。` +
               `description 是账单列表显示的凝练标题；detail 是稍微详细的识别依据。` +
-              `盒马、沃尔玛、山姆或其他超市的一张小票/一次结账必须返回一笔 transaction，grouping=folded，逐商品放入 splitItems；父级 amount 是优惠后的实际支付总额。quantity 必须包含具体数量和单位，例如“3杯”“1袋”“950ml 1盒”。` +
+              `盒马、沃尔玛、山姆或其他超市的一张小票/一次结账必须返回一笔 transaction，grouping=folded，逐商品放入 splitItems；父级 amount 是优惠后的实际支付总额。父账单只是结算容器：明细跨分类时父级 category 返回“其他”，全部同类时跟随明细分类。quantity 必须包含具体数量和单位，例如“3杯”“1袋”“950ml 1盒”。` +
               `淘宝/天猫同一个订单的商品可折叠在 splitItems；订单列表中的多个订单、不同日期或多次实付款必须返回多笔 transactions，绝不能合并金额。` +
               `饮料、咖啡、牛奶、酒水归“饮料”；饭菜、生鲜、水果、零食、冰淇淋、熟食归“餐费”；清洁洗护归“日用”；鞋服归“服饰”。` +
               `tag 是整笔交易可选的单一场景标签，只能返回 0 或 1 个短词，禁止数组、逗号分隔和 # 前缀；商户名写入 merchant，不要写进 tag。` +

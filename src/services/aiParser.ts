@@ -1,6 +1,7 @@
 import type { AppSettings, ParsedBatch, ParsedTransaction, SplitItem } from '../types';
 import { cloudApi } from './cloudApi';
 import { todayISO } from './date';
+import { categoryForFoldedParent } from './foldedCategories';
 import { normalizeMerchant, normalizeScenarioTag } from './ledgerNormalization';
 import { storage } from './storage';
 
@@ -89,7 +90,7 @@ const localTransaction = (text: string, categories: string[]): ParsedTransaction
   const splitItems = parseSplitItems(text, categories);
   const paidAmount = extractAmount(text);
   const amount = paidAmount || Number(splitItems.reduce((sum, item) => sum + item.amount, 0).toFixed(2));
-  const category = splitItems[0]?.category ?? findCategory(text, categories);
+  const category = categoryForFoldedParent(splitItems, findCategory(text, categories));
   return {
     amount,
     category,
@@ -126,7 +127,7 @@ const firstText = (value: Record<string, unknown>, keys: string[]) => {
 
 const normalizeRemoteTransaction = (parsed: Record<string, unknown>, text: string, categories: string[]): ParsedTransaction => {
   const parsedCategory = typeof parsed.category === 'string' ? parsed.category : '';
-  const category = categories.includes(parsedCategory) ? parsedCategory : findCategory(`${text} ${parsedCategory}`, categories);
+  const fallbackCategory = categories.includes(parsedCategory) ? parsedCategory : findCategory(`${text} ${parsedCategory}`, categories);
   const parsedTag = normalizeScenarioTag(parsed.tag);
   const rawSplitItems = Array.isArray(parsed.splitItems) ? parsed.splitItems : Array.isArray(parsed.lineItems) ? parsed.lineItems : undefined;
   const splitItems = rawSplitItems
@@ -146,6 +147,7 @@ const normalizeRemoteTransaction = (parsed: Record<string, unknown>, text: strin
         } satisfies SplitItem];
       })
     : undefined;
+  const category = categoryForFoldedParent(splitItems, fallbackCategory);
   const parsedAmount = Number(parsed.amount ?? parsed.paidAmount ?? parsed.total) || 0;
   const itemTotal = Number((splitItems ?? []).reduce((sum, item) => sum + item.amount, 0).toFixed(2));
   const amount = parsedAmount || itemTotal || extractAmount(text);
@@ -189,7 +191,7 @@ export const buildTransactionPrompt = (categories: string[]) => `你是记账助
 3. 盒马、沃尔玛、山姆及其他超市的一张小票/一次结账默认折叠为一笔，splitItems 逐商品列出。
 4. 淘宝/天猫：同一个订单的多个商品可折叠；订单列表中的多个订单、不同日期或多次实付款必须拆成多笔 transactions。
 5. 每笔交易的日期都要从对应原句独立提取；账本不保存支付方式，不要返回 paymentMethod。
-6. splitItems 每项只包含 amount, category, description, detail, quantity。父级 amount 是实际支付总额；优惠导致商品合计不同于实付时保留实付总额，并在 detail 说明。
+6. splitItems 每项只包含 amount, category, description, detail, quantity。父级 amount 是实际支付总额；父账单只是结算容器，明细跨分类时父级 category 返回“其他”，全部明细同类时父级 category 跟随该类。优惠导致商品合计不同于实付时保留实付总额，并在 detail 说明。
 7. tag 是整笔交易可选的单一场景标签，只能返回 0 或 1 个短词；禁止数组、多个标签、逗号分隔和 # 前缀，也不能把商户、分类或支付方式当作标签。merchant 只在原文明确出现品牌或平台时填写。
 8. description 为 4 到 12 个中文字符左右的账单标题；date 必须为 YYYY-MM-DD。信息缺失时不要编造。
 

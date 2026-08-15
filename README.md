@@ -2,7 +2,7 @@
 
 智能记账是一款本地优先的 Android 记账工具。它用 MiMo 把文字、账单截图或应用内录音整理为可核对的结构化账单；任何 AI 结果都必须经过确认才会入账。
 
-当前候选版本为 `v1.5.0-rc.3`。这是在线测试版本，尚未迁移到 `main`。RC3 只修复 Android WebView 录音所需的完整权限声明和拒绝后的恢复提示；云端 API 仍沿用已验证的 RC2 服务。
+当前候选版本为 `v1.5.0-rc.4`。这是在线测试版本，尚未迁移到 `main`。RC4 在 RC3 语音权限修复基础上，将折叠父账单明确为结算容器：混合商品按明细分类统计，同时修复长商品名和重复分类按钮造成的移动端横向溢出；云端 API 仍沿用已验证的 RC2 服务。
 
 ## 当前能力
 
@@ -45,7 +45,7 @@ Model: mimo-v2.5
 从 GitHub Releases 下载：
 
 ```text
-jizhang-v1.5.0-rc.3-debug.apk
+jizhang-v1.5.0-rc.4-debug.apk
 ```
 
 升级安装会保留现有应用数据；请勿先卸载旧版。首次使用应用内语音时，Android 会请求麦克风权限。
@@ -57,6 +57,7 @@ jizhang-v1.5.0-rc.3-debug.apk
 
 ```powershell
 npm install
+npm run test:folded-categories
 npm run test:feature
 npm run test:storage
 npm run test:analytics
@@ -90,7 +91,7 @@ Set-Location android
 .\gradlew.bat assembleDebug
 ```
 
-输出位于 `android/app/build/outputs/apk/debug/app-debug.apk`。当前 Android 元数据为 `versionCode 18`、`versionName 1.5.0-rc.3`。
+输出位于 `android/app/build/outputs/apk/debug/app-debug.apk`。当前 Android 元数据为 `versionCode 19`、`versionName 1.5.0-rc.4`。
 
 ## 云端部署边界
 

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Calendar, CheckSquare, ChevronDown, ChevronUp, Pencil, Save, Search, ShoppingBag, Square, Tag, Trash2, X } from 'lucide-react';
 import { getCategoryEmoji } from '../data/categories';
 import { formatShortDate } from '../services/date';
+import { categoryForFoldedParent, summarizeFoldedCategories } from '../services/foldedCategories';
 import { storage } from '../services/storage';
 import type { Transaction } from '../types';
 
@@ -34,7 +35,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
   const filteredList = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return list.filter(item => {
-      const matchesCategory = selectedCategory === '全部' || item.category === selectedCategory || item.subItems?.some(subItem => subItem.category === selectedCategory);
+      const matchesCategory = selectedCategory === '全部' || (item.subItems?.length ? item.subItems.some(subItem => subItem.category === selectedCategory) : item.category === selectedCategory);
       const matchesMerchant = selectedMerchant === '全部商户' || item.merchant === selectedMerchant;
       const matchesSearch =
         !keyword ||
@@ -50,7 +51,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
             subItem.category.toLowerCase().includes(keyword) ||
             subItem.amount.toString().includes(keyword),
         ) ||
-        item.category.toLowerCase().includes(keyword) ||
+        (!item.subItems?.length && item.category.toLowerCase().includes(keyword)) ||
         item.amount.toString().includes(keyword) ||
         item.tag?.toLowerCase().includes(keyword);
       return matchesCategory && matchesMerchant && matchesSearch;
@@ -125,7 +126,10 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
 
   const saveEditing = () => {
     if (!editDraft) return;
-    storage.saveTransaction(editDraft);
+    storage.saveTransaction({
+      ...editDraft,
+      category: categoryForFoldedParent(editDraft.subItems, editDraft.category),
+    });
     setList(storage.getTransactions());
     setEditingId(null);
     setEditDraft(null);
@@ -134,9 +138,11 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
 
   const updateSubItem = (index: number, patch: Partial<NonNullable<Transaction['subItems']>[number]>) => {
     if (!editDraft?.subItems) return;
+    const subItems = editDraft.subItems.map((subItem, subItemIndex) => (subItemIndex === index ? { ...subItem, ...patch } : subItem));
     setEditDraft({
       ...editDraft,
-      subItems: editDraft.subItems.map((subItem, subItemIndex) => (subItemIndex === index ? { ...subItem, ...patch } : subItem)),
+      category: categoryForFoldedParent(subItems, editDraft.category),
+      subItems,
     });
   };
 
@@ -260,6 +266,8 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                     const displayItem = editing ? editDraft : item;
                     const selected = selectedIds.includes(item.id);
                     const title = transactionTitle(item);
+                    const categorySummary = summarizeFoldedCategories(displayItem.subItems);
+                    const displayCategory = categorySummary.kind === 'mixed' ? '多分类' : categorySummary.category ?? displayItem.category;
                     return (
                       <article key={item.id}>
                         <button
@@ -281,7 +289,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                               </span>
                             )}
                             <div className="w-10 h-10 rounded-xl bg-black/[0.04] flex items-center justify-center text-lg shadow-inner shrink-0">
-                              {getCategoryEmoji(item.category)}
+                              {categorySummary.kind === 'mixed' ? <ShoppingBag size={18} className="text-brand-purple" /> : getCategoryEmoji(displayCategory)}
                             </div>
                             <div className="space-y-1 min-w-0 flex-1 pr-2">
                               <div className="flex items-center gap-1.5">
@@ -290,7 +298,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                                 {item.recognition?.warnings?.length ? <span className="text-[9px] font-bold text-amber-600 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded shrink-0">需核对</span> : null}
                               </div>
                               <div className="flex items-center gap-1.5 text-[10px] text-dark-muted">
-                                <span className="bg-black/[0.03] px-1.5 py-0.5 rounded border border-black/[0.05] shrink-0">{item.category}</span>
+                                <span className="bg-black/[0.03] px-1.5 py-0.5 rounded border border-black/[0.05] shrink-0">{displayCategory}</span>
                                 {item.merchant && <><span>·</span><span className="truncate">{item.merchant}</span></>}
                               </div>
                             </div>
@@ -355,14 +363,22 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                             ) : null}
                             {editing ? (
                               <div className="grid grid-cols-2 gap-2">
-                                <EditField label="分类">
-                                  <EditSelect
-                                    ariaLabel="账单分类"
-                                    categories={categories}
-                                    value={displayItem.category}
-                                    onChange={category => setEditDraft({ ...displayItem, category })}
-                                  />
-                                </EditField>
+                                {displayItem.subItems?.length ? (
+                                  <EditField label="分类归属">
+                                    <span className="text-[11px] font-semibold text-brand-purple block truncate">
+                                      {categorySummary.kind === 'mixed' ? `按 ${categorySummary.categories.length} 类明细统计` : `${getCategoryEmoji(displayCategory)} ${displayCategory}`}
+                                    </span>
+                                  </EditField>
+                                ) : (
+                                  <EditField label="分类">
+                                    <EditSelect
+                                      ariaLabel="账单分类"
+                                      categories={categories}
+                                      value={displayItem.category}
+                                      onChange={category => setEditDraft({ ...displayItem, category })}
+                                    />
+                                  </EditField>
+                                )}
                                 <EditField label="日期">
                                   <EditDatePicker
                                     ariaLabel="账单日期"
@@ -387,7 +403,7 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
                               </div>
                             ) : (
                               <div className="grid grid-cols-2 gap-2">
-                                <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类" value={`${getCategoryEmoji(item.category)} ${item.category}`} />
+                                <Detail icon={<Tag size={14} className="text-brand-purple" />} label="分类归属" value={categorySummary.kind === 'mixed' ? `按 ${categorySummary.categories.length} 类商品明细` : `${getCategoryEmoji(displayCategory)} ${displayCategory}`} />
                                 <Detail icon={<Calendar size={14} className="text-brand-blue" />} label="日期" value={item.date} />
                                 <Detail icon={<Tag size={14} className="text-brand-purple" />} label="场景标签" value={item.tag ?? '无'} />
                                 {item.merchant && <Detail icon={<ShoppingBag size={14} className="text-brand-cyan" />} label="商户" value={item.merchant} />}
@@ -438,7 +454,8 @@ export function TransactionList({ onTransactionDeleted }: TransactionListProps) 
 function transactionTitle(item: Transaction) {
   const raw = item.description.replace(/\s+/g, ' ').trim();
   if (!raw || /根据|识别|归类|金额|原始描述|消费场景|拆单依据/.test(raw)) {
-    return `${item.category}支出`;
+    const summary = summarizeFoldedCategories(item.subItems);
+    return summary.kind === 'mixed' ? '综合采购' : `${summary.category ?? item.category}支出`;
   }
   const firstClause = raw.split(/[。；;，,]/)[0]?.trim() || raw;
   return firstClause.length > 14 ? `${firstClause.slice(0, 14)}...` : firstClause;

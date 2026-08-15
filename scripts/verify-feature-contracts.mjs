@@ -17,6 +17,7 @@ const cloudSync = read('src/services/cloudLedgerSync.ts');
 const androidBuild = read('android/app/build.gradle');
 const androidManifest = read('android/app/src/main/AndroidManifest.xml');
 const voiceInput = read('src/services/voiceInput.ts');
+const foldedCategories = read('src/services/foldedCategories.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 for (const category of ['零食', '水果', 'AI服务']) {
@@ -37,10 +38,10 @@ assert.match(transactionList, /编辑/, 'transaction details should expose an ed
 assert.match(transactionList, /overflow-y-auto/, 'long transaction details should be scrollable');
 assert.match(storage, /rawTransactions \? JSON\.parse\(rawTransactions\) : \[\]/, 'new users should start with an empty transaction list');
 assert.match(storage, /const migrated = migrateTransactions\(transactions\)/, 'existing transactions should be migrated instead of replaced');
-assert.equal(packageJson.version, '1.5.0-rc.3', 'package version should be the RC version');
-assert.match(app, /v1\.5\.0-rc\.3/, 'app header should show the RC version');
-assert.match(androidBuild, /versionCode 18/, 'Android versionCode should be 18');
-assert.match(androidBuild, /versionName "1\.5\.0-rc\.3"/, 'Android versionName should be the RC version');
+assert.equal(packageJson.version, '1.5.0-rc.4', 'package version should be the RC version');
+assert.match(app, /v1\.5\.0-rc\.4/, 'app header should show the RC version');
+assert.match(androidBuild, /versionCode 19/, 'Android versionCode should be 19');
+assert.match(androidBuild, /versionName "1\.5\.0-rc\.4"/, 'Android versionName should be the RC version');
 assert.match(androidManifest, /android\.permission\.RECORD_AUDIO/, 'Android should declare microphone capture permission');
 assert.match(androidManifest, /android\.permission\.MODIFY_AUDIO_SETTINGS/, 'Capacitor WebView audio capture should declare its normal audio-settings permission');
 assert.match(voiceInput, /系统设置 → 应用 → 记账 → 权限 → 麦克风/, 'permission denial should provide an actionable Android recovery path');
@@ -50,6 +51,12 @@ assert.match(storage, /aiMode: 'custom'/, 'self-managed key should remain the sa
 assert.match(storage, /saveTransactions/, 'storage should support atomic batch writes');
 assert.match(storage, /cloudSyncEnabled: false/, 'cloud sync should remain opt-in');
 assert.match(aiParser, /绝不能把跨日期金额相加成一笔/, 'batch prompt should forbid cross-date aggregation');
+assert.match(aiParser, /父账单只是结算容器/, 'batch prompt should treat folded parents as settlement containers');
+assert.match(foldedCategories, /kind: 'mixed'/, 'folded category summary should represent mixed-category parents');
+assert.match(foldedCategories, /\? '其他'/, 'mixed folded parents should use a neutral compatibility category');
+assert.match(aiInput, /综合采购/, 'mixed folded bills should show a neutral summary instead of a parent category picker');
+assert.match(aiInput, /grid-cols-\[5\.5rem_minmax\(0,1fr\)\]/, 'split-item fields should constrain the description column on mobile');
+assert.match(aiInput, /<select aria-label=\{`第\$\{splitIndex \+ 1\}项商品分类`\}/, 'split-item category editing should use a compact select');
 assert.doesNotMatch(app, /key=\{`input-\$\{refreshKey\}`\}/, 'saving should not remount the active input flow');
 assert.match(aiInput, /查看刚入账明细/, 'successful saves should offer explicit navigation to transaction details');
 assert.match(aiInput, /textareaRef\.current\?\.focus\(\)/, 'successful saves should return focus for continuous entry');
@@ -60,6 +67,8 @@ assert.doesNotMatch(aiInput, /支付方式|paymentMethod|CreditCard/, 'new entry
 assert.doesNotMatch(transactionList, /支付方式|paymentMethod|CreditCard/, 'transaction details should not retain payment methods');
 assert.match(transactionList, /商户筛选/, 'details should support merchant filtering');
 assert.match(transactionList, /subItem\.description/, 'details search should include folded product names');
+assert.match(transactionList, /item\.subItems\?\.length \? item\.subItems\.some/, 'folded category filters should use child categories instead of the neutral parent field');
+assert.match(transactionList, /categoryForFoldedParent\(subItems/, 'editing a child category should keep the parent compatibility field derived');
 assert.match(aiParser, /只能返回 0 或 1 个短词/, 'model prompt should constrain tags to one scenario');
 assert.match(aiParser, /不要返回 paymentMethod/, 'model prompt should omit payment methods');
 assert.match(analytics, /paid - allocated\.reduce/, 'folded category allocation should conserve actual paid totals');

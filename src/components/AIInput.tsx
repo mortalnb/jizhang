@@ -3,6 +3,7 @@ import { Calendar, Check, DollarSign, Image, Layers, Loader2, Mic, ReceiptText, 
 import { getCategoryEmoji } from '../data/categories';
 import { aiParser } from '../services/aiParser';
 import { parseBillText, recognizeBillImage, sourceOptions, type BillSource, type RecognizedBill } from '../services/billRecognition';
+import { categoryForFoldedParent, summarizeFoldedCategories } from '../services/foldedCategories';
 import { storage } from '../services/storage';
 import { MAX_VOICE_SECONDS, startVoiceRecorder, transcribeVoice, type ActiveVoiceRecorder } from '../services/voiceInput';
 import type { ParsedBatch, ParsedTransaction, SplitItem } from '../types';
@@ -28,7 +29,7 @@ const mergedTransaction = (batch: ParsedBatch, label = '合并消费'): ParsedTr
   );
   return {
     amount: Number(batch.transactions.reduce((sum, transaction) => sum + transaction.amount, 0).toFixed(2)),
-    category: first?.category ?? '其他',
+    category: categoryForFoldedParent(splitItems, first?.category ?? '其他'),
     description: label,
     detail: `手动合并 ${batch.transactions.length} 笔消费；合并后使用第一笔日期。`,
     date: first?.date ?? new Date().toISOString().slice(0, 10),
@@ -102,14 +103,18 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
 
   const normalizeBatchCategories = (batch: ParsedBatch): ParsedBatch => ({
     ...batch,
-    transactions: batch.transactions.map(transaction => ({
-      ...transaction,
-      category: normalizeCategory(transaction.category, `${transaction.description} ${transaction.detail ?? ''}`),
-      splitItems: transaction.splitItems?.map(item => ({
+    transactions: batch.transactions.map(transaction => {
+      const splitItems = transaction.splitItems?.map(item => ({
         ...item,
         category: normalizeCategory(item.category, `${item.description} ${item.detail ?? ''}`),
-      })),
-    })),
+      }));
+      const fallbackCategory = normalizeCategory(transaction.category, `${transaction.description} ${transaction.detail ?? ''}`);
+      return {
+        ...transaction,
+        category: categoryForFoldedParent(splitItems, fallbackCategory),
+        splitItems,
+      };
+    }),
   });
 
   const parse = async (text: string) => {
@@ -222,7 +227,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
     const transaction = parsedBatch?.transactions[transactionIndex];
     if (!parsedBatch || !transaction?.splitItems) return;
     const splitItems = transaction.splitItems.map((item, itemIndex) => itemIndex === splitIndex ? { ...item, ...patch } : item);
-    updateTransaction(transactionIndex, { splitItems });
+    updateTransaction(transactionIndex, { category: categoryForFoldedParent(splitItems, transaction.category), splitItems });
   };
 
   const save = () => {
@@ -370,6 +375,7 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
           {parsedBatch.transactions.map((transaction, transactionIndex) => {
             const detailTotal = itemTotal(transaction);
             const totalMismatch = detailTotal > 0 && Math.abs(detailTotal - transaction.amount) > 0.05;
+            const categorySummary = summarizeFoldedCategories(transaction.splitItems);
             return (
               <article key={`${transaction.date}-${transactionIndex}`} className="glass-panel rounded-2xl p-4 border border-black/[0.07] space-y-4">
                 <div className="flex items-center justify-between"><span className="text-xs font-bold">第 {transactionIndex + 1} 笔 · {transaction.grouping === 'folded' || transaction.splitItems?.length ? '折叠账单' : '独立消费'}</span>{parsedBatch.transactions.length > 1 && <button type="button" onClick={() => setParsedBatch({ ...parsedBatch, transactions: parsedBatch.transactions.filter((_, index) => index !== transactionIndex) })} className="p-1.5 text-brand-rose"><Trash2 size={14} /></button>}</div>
@@ -378,16 +384,54 @@ export function AIInput({ onNavigateToTransactions, onTransactionSaved }: AIInpu
                   <FieldLabel icon={<DollarSign size={12} />} label="实际支出"><input type="number" step="0.01" value={transaction.amount} onChange={event => updateTransaction(transactionIndex, { amount: Number(event.target.value) || 0 })} className="w-full text-lg font-extrabold bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 text-brand-purple font-mono" /></FieldLabel>
                   <FieldLabel icon={<Calendar size={12} />} label="交易日期"><input type="date" value={transaction.date} onChange={event => updateTransaction(transactionIndex, { date: event.target.value })} className="w-full text-xs bg-dark-surface border border-black/[0.08] rounded-xl px-3 py-2 h-[42px]" /></FieldLabel>
                 </div>
-                <div className="space-y-1"><span className="text-xs text-dark-muted font-medium flex items-center gap-1"><Tag size={12} />分类</span><CategoryPicker categories={categories} value={transaction.category} onChange={category => updateTransaction(transactionIndex, { category })} /></div>
+                {transaction.splitItems?.length ? (
+                  <div className="space-y-1">
+                    <span className="text-xs text-dark-muted font-medium flex items-center gap-1"><Tag size={12} />分类归属</span>
+                    <div className="min-w-0 rounded-xl border border-brand-purple/20 bg-brand-purple/[0.05] px-3 py-2.5 flex items-center gap-2.5">
+                      <span className="w-8 h-8 rounded-lg bg-white border border-brand-purple/15 text-brand-purple flex items-center justify-center shrink-0"><Layers size={15} /></span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-dark-text truncate">
+                          {categorySummary.kind === 'mixed' ? '综合采购' : `${getCategoryEmoji(categorySummary.category ?? transaction.category)} ${categorySummary.category ?? transaction.category}`}
+                        </p>
+                        <p className="text-[10px] text-dark-muted mt-0.5">
+                          {categorySummary.kind === 'mixed' ? `按 ${categorySummary.categories.length} 类商品明细统计` : '父账单分类自动跟随商品明细'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1"><span className="text-xs text-dark-muted font-medium flex items-center gap-1"><Tag size={12} />分类</span><CategoryPicker categories={categories} value={transaction.category} onChange={category => updateTransaction(transactionIndex, { category })} /></div>
+                )}
 
                 {transaction.splitItems?.length ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between"><p className="text-xs text-brand-purple font-bold">商品明细（默认折叠保存）</p><span className={`text-[10px] ${totalMismatch ? 'text-amber-700' : 'text-dark-muted'}`}>明细 ¥{detailTotal.toFixed(2)}{totalMismatch ? ` / 实付 ¥${transaction.amount.toFixed(2)}` : ''}</span></div>
                     {transaction.splitItems.map((item, splitIndex) => (
-                      <div key={`${item.description}-${splitIndex}`} className="bg-black/[0.01] border border-black/[0.05] rounded-xl p-3 space-y-2">
-                        <div className="grid grid-cols-[0.8fr_1.4fr] gap-2"><input type="number" step="0.01" value={item.amount} onChange={event => updateSplit(transactionIndex, splitIndex, { amount: Number(event.target.value) || 0 })} className="text-xs bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 py-1.5 text-brand-cyan font-semibold font-mono" /><input type="text" value={item.description} onChange={event => updateSplit(transactionIndex, splitIndex, { description: event.target.value })} className="text-xs bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 py-1.5" /></div>
-                        {item.quantity && <input type="text" value={item.quantity} onChange={event => updateSplit(transactionIndex, splitIndex, { quantity: event.target.value })} className="w-full text-[10px] bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 py-1.5" aria-label="商品数量" />}
-                        <CategoryPicker compact categories={categories} value={item.category} onChange={category => updateSplit(transactionIndex, splitIndex, { category })} />
+                      <div key={`${item.description}-${splitIndex}`} className="min-w-0 overflow-hidden bg-black/[0.01] border border-black/[0.05] rounded-xl p-3 space-y-2.5">
+                        <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-2">
+                          <label className="min-w-0">
+                            <span className="sr-only">第{splitIndex + 1}项金额</span>
+                            <input aria-label={`第${splitIndex + 1}项金额`} type="number" step="0.01" value={item.amount} onChange={event => updateSplit(transactionIndex, splitIndex, { amount: Number(event.target.value) || 0 })} className="w-full min-w-0 h-9 text-xs bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 text-brand-cyan font-semibold font-mono" />
+                          </label>
+                          <label className="min-w-0">
+                            <span className="sr-only">第{splitIndex + 1}项商品名称</span>
+                            <input aria-label={`第${splitIndex + 1}项商品名称`} title={item.description} type="text" value={item.description} onChange={event => updateSplit(transactionIndex, splitIndex, { description: event.target.value })} className="w-full min-w-0 h-9 text-xs bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 text-ellipsis" />
+                          </label>
+                        </div>
+                        <div className={`grid gap-2 ${item.quantity ? 'grid-cols-[minmax(0,1fr)_minmax(7.5rem,0.8fr)]' : 'grid-cols-1'}`}>
+                          {item.quantity && (
+                            <label className="min-w-0 space-y-1">
+                              <span className="text-[9px] text-dark-muted block px-0.5">数量</span>
+                              <input aria-label={`第${splitIndex + 1}项商品数量`} type="text" value={item.quantity} onChange={event => updateSplit(transactionIndex, splitIndex, { quantity: event.target.value })} className="w-full min-w-0 h-9 text-[10px] bg-dark-surface border border-black/[0.06] rounded-lg px-2.5" />
+                            </label>
+                          )}
+                          <label className="min-w-0 space-y-1">
+                            <span className="text-[9px] text-dark-muted block px-0.5">明细分类</span>
+                            <select aria-label={`第${splitIndex + 1}项商品分类`} value={item.category} onChange={event => updateSplit(transactionIndex, splitIndex, { category: event.target.value })} className="w-full min-w-0 h-9 text-[10px] bg-dark-surface border border-black/[0.06] rounded-lg px-2.5 text-dark-text focus:outline-none focus:border-brand-purple/35">
+                              {categories.map(category => <option key={category} value={category}>{getCategoryEmoji(category)} {category}</option>)}
+                            </select>
+                          </label>
+                        </div>
                       </div>
                     ))}
                     {totalMismatch && <p className="text-[10px] text-amber-700">商品合计与实付不同，通常来自优惠、运费或识别遗漏；保存时保留上方“实际支出”。</p>}
@@ -408,10 +452,10 @@ function FieldLabel({ children, icon, label }: { children: React.ReactNode; icon
   return <label className="space-y-1 block"><span className="text-xs text-dark-muted font-medium flex items-center gap-1">{icon} {label}</span>{children}</label>;
 }
 
-function CategoryPicker({ categories, compact = false, onChange, value }: { categories: string[]; compact?: boolean; onChange: (category: string) => void; value: string }) {
+function CategoryPicker({ categories, onChange, value }: { categories: string[]; onChange: (category: string) => void; value: string }) {
   return (
-    <div className={compact ? 'flex gap-1.5 overflow-x-auto no-scrollbar py-0.5' : 'grid grid-cols-3 gap-2'}>
-      {categories.map(category => <button key={category} type="button" onClick={() => onChange(category)} className={`text-xs rounded-xl border transition-all active:scale-95 ${compact ? 'px-2.5 py-1 shrink-0' : 'py-2 flex items-center justify-center gap-1'} ${value === category ? 'bg-brand-purple/10 border-brand-purple/40 text-brand-purple font-bold' : 'bg-black/[0.02] border-black/[0.05]'}`}><span>{getCategoryEmoji(category)}</span><span>{category}</span></button>)}
+    <div className="grid grid-cols-3 gap-2">
+      {categories.map(category => <button key={category} type="button" onClick={() => onChange(category)} className={`text-xs rounded-xl border transition-all active:scale-95 py-2 flex items-center justify-center gap-1 ${value === category ? 'bg-brand-purple/10 border-brand-purple/40 text-brand-purple font-bold' : 'bg-black/[0.02] border-black/[0.05]'}`}><span>{getCategoryEmoji(category)}</span><span>{category}</span></button>)}
     </div>
   );
 }
