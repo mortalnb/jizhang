@@ -2,15 +2,21 @@
 
 ## 进入项目
 
-- 先运行 `git -c core.quotepath=false status --short --branch`，确认分支、HEAD、远端和未跟踪文件，再读取 `README.md`、`docs/PRD.md` 以及与任务有关的真实账本评估。
+- 先运行 `git -c core.quotepath=false status --short --branch`，确认分支、HEAD、远端和未跟踪文件，再读取 `README.md`、`docs/PRD.md`、`docs/MAINTENANCE.md` 以及与任务有关的真实账本评估。
 - 当前 Codex 环境提供 `$jizhang-product-release` 时，用它处理账单语义、真实数据、浏览器验收、Android 打包和主线发布；Skill 不可用时仍以本文件与项目测试为准。
 - 以当前代码、测试、版本元数据和实时 API 状态为准。根目录单数 `AGENT.md` 若存在，只视为旧迁移笔记，不得据此覆盖当前事实。
-- 只暂存本次明确改动。账本导出、APK、浏览器证据、密钥、环境文件和用户草稿即使位于仓库中，也不得批量加入、改写或清理。
+- 只暂存本次明确改动。账本导出、APK、浏览器证据、密钥、环境文件和用户草稿即使位于仓库中，也不得批量加入、改写或清理。已合入 `main` 的旧功能分支只作历史参考，不得因名称较新而当作当前主线。
+
+## 目录与本机文件
+
+- 根目录保留工具默认发现或项目入口所需的文件；可显式寻址的二级配置放在 `config/`。不要为了表面整齐移动 `package*.json`、`index.html`、根 `tsconfig.json`、Vite、Capacitor 或 ESLint 入口。
+- 本机私有输入、历史证据和生成制品统一放在被忽略的 `.local/`：MiMo Key 位于 `.local/credentials/mimo-api-key.txt`，升级签名输入位于 `.local/signing/debug.keystore`，APK 位于 `.local/releases/`，历史材料位于 `.local/archive/`。
+- 根目录旧 `key.txt`、`debug.keystore`、`.local-archive/` 和 `.toolchain/` 仅作为迁移兼容，不得重新作为文档推荐路径。移动或清理 `.local/` 前必须确认目标、保留签名连续性和真实账本证据。
 
 ## 依赖与重复故障
 
 - 在安装依赖、打包或诊断前先运行 `npm run doctor`。不要因 `PATH` 或 `JAVA_HOME` 暂时缺失就判定工具不存在；先读取项目配置并检查项目级工具链，再考虑修改系统环境。
-- Android 构建固定使用 JDK 21，SDK 位置以被忽略的 `android/local.properties` 为准，签名输入使用根目录被忽略的 `debug.keystore`。不得把机器绝对路径、密钥内容或口令写入仓库。
+- Android 构建固定使用 JDK 21，SDK 位置以被忽略的 `android/local.properties` 为准，签名输入默认使用 `.local/signing/debug.keystore`。不得把机器绝对路径、密钥内容或口令写入仓库。
 - 完整 Android 打包统一运行 `npm run android:build`。该脚本负责设置进程级工具链、从正确目录调用 Gradle wrapper，并核对包名、版本、录音权限、v2 签名和升级证书指纹；不要再复制多层临时命令。
 - 调用 `git`、`npm`、Java、Gradle、ADB、SSH 等原生命令后立即读取并判断退出码。命令路径、工作目录或环境失败属于工具链故障，不能报告为代码或构建失败。
 - 同一类故障第二次出现时，优先把检查或修复固化到版本化脚本、测试或项目说明中，而不是只在当前终端临时修好；沉淀稳定原则，不记录易变机器状态。

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createServer } from 'vite';
+import { readMimoApiKey } from './local-paths.mjs';
 
-const apiKey = fs.readFileSync('key.txt', 'utf8').trim();
-assert.ok(apiKey, 'key.txt must contain a MiMo API key');
+const apiKey = readMimoApiKey();
 const categories = ['餐费', '饮料', '零食', '水果', '交通', '娱乐', '日用', '服饰', '数码', 'AI服务', '人情', '医疗', '交费', '维修', '其他'];
 
 const vite = await createServer({ appType: 'custom', logLevel: 'error', server: { middlewareMode: true } });

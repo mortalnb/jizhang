@@ -53,9 +53,9 @@ RC4 已作为 [GitHub Pre-release](https://github.com/mortalnb/jizhang/releases/
 升级安装会保留现有应用数据；请勿先卸载旧版。首次使用应用内语音时，Android 会请求麦克风权限。
 
 详细操作见 [安装与配置](docs/SETUP.md)，数据处理边界见 [隐私政策](PRIVACY.md) 与 [免责声明](DISCLAIMER.md)。
-真实账本的聚合评估与不改写边界见 [2026-08-09 样本评估](docs/REAL_LEDGER_FINDINGS_2026-08-09.md)。
+真实账本的聚合评估与不改写边界见 [2026-08-09 样本评估](docs/REAL_LEDGER_FINDINGS_2026-08-09.md)，当前方向、旧方向和目录职责见 [项目维护与方向基线](docs/MAINTENANCE.md)。
 
-根目录只保留当前安装包与构建所需的本地输入；旧安装包、测试截图、历史交接说明和真实账本快照存入被 Git 忽略的 `.local-archive/`，不得提交或部署。
+本机私有输入与生成制品统一放入被 Git 忽略的 `.local/`：MiMo Key 在 `credentials/`，升级签名在 `signing/`，本地 APK 在 `releases/`，历史安装包、日志、真实账本证据和旧说明在 `archive/`。根目录只保留工具默认发现或项目入口真正需要的文件。
 
 ## 本地开发与验证
 
@@ -66,7 +66,7 @@ npm run verify
 npm run android:build
 ```
 
-真实 MiMo 验证需要项目根目录中被 Git 忽略的 `key.txt`：
+真实 MiMo 验证需要被 Git 忽略的 `.local/credentials/mimo-api-key.txt`；也可通过 `JIZHANG_MIMO_KEY_FILE` 指定其他本机路径：
 
 ```powershell
 npm run test:mimo-aa
@@ -90,7 +90,7 @@ npm run doctor
 npm run android:build
 ```
 
-脚本从 `android/local.properties` 发现 SDK，并优先复用其同级项目工具链中的 JDK 21；无需依赖全局 `JAVA_HOME`。它会生成根目录 `jizhang-v1.5.0-rc.4-debug.apk`，并验证包名、版本、麦克风权限、v2 签名和升级证书指纹。当前 Android 元数据为 `versionCode 19`、`versionName 1.5.0-rc.4`。
+脚本从 `android/local.properties` 发现 SDK，并优先复用其同级项目工具链中的 JDK 21；无需依赖全局 `JAVA_HOME`。默认签名输入为 `.local/signing/debug.keystore`，生成 `.local/releases/jizhang-v1.5.0-rc.4-debug.apk`，并验证包名、版本、麦克风权限、v2 签名和升级证书指纹。当前 Android 元数据为 `versionCode 19`、`versionName 1.5.0-rc.4`。
 
 ## 云端部署边界
 

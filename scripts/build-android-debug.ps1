@@ -29,6 +29,24 @@ function Invoke-NativeChecked {
     }
 }
 
+function Resolve-FirstFile {
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [AllowEmptyString()] [string[]]$Candidates,
+        [Parameter(Mandatory)] [string]$MissingMessage
+    )
+
+    foreach ($candidate in $Candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        $fullPath = [IO.Path]::GetFullPath($candidate)
+        if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $fullPath).Path
+        }
+    }
+    throw $MissingMessage
+}
+
 function Get-AndroidSdkPath {
     param([Parameter(Mandatory)] [string]$ProjectRoot)
 
@@ -147,19 +165,36 @@ if (-not $npmCommand) {
 $sdkPath = Get-AndroidSdkPath -ProjectRoot $projectRoot
 $java = Resolve-Java21 -AndroidSdkPath $sdkPath
 $buildTools = Get-AndroidBuildTools -AndroidSdkPath $sdkPath
-$keystorePath = Join-Path $projectRoot 'debug.keystore'
-if (-not (Test-Path -LiteralPath $keystorePath -PathType Leaf)) {
-    throw 'debug.keystore is missing; rebuilding would break APK signing continuity.'
+$localRoot = Join-Path $projectRoot '.local'
+$configuredKeystore = if ([string]::IsNullOrWhiteSpace($env:JIZHANG_KEYSTORE_PATH)) {
+    $null
 }
+elseif ([IO.Path]::IsPathRooted($env:JIZHANG_KEYSTORE_PATH)) {
+    $env:JIZHANG_KEYSTORE_PATH
+}
+else {
+    Join-Path $projectRoot $env:JIZHANG_KEYSTORE_PATH
+}
+$keystorePath = Resolve-FirstFile -Candidates @(
+    $configuredKeystore,
+    (Join-Path $localRoot 'signing\debug.keystore'),
+    (Join-Path $projectRoot 'debug.keystore')
+) -MissingMessage 'The debug keystore is missing; place the accepted signing input at .local/signing/debug.keystore or set JIZHANG_KEYSTORE_PATH.'
+$mimoKeyCandidates = @(
+    $(if ([string]::IsNullOrWhiteSpace($env:JIZHANG_MIMO_KEY_FILE)) { $null } elseif ([IO.Path]::IsPathRooted($env:JIZHANG_MIMO_KEY_FILE)) { $env:JIZHANG_MIMO_KEY_FILE } else { Join-Path $projectRoot $env:JIZHANG_MIMO_KEY_FILE }),
+    (Join-Path $localRoot 'credentials\mimo-api-key.txt'),
+    (Join-Path $projectRoot 'key.txt')
+)
+$mimoKeyPath = $mimoKeyCandidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
 
 Write-Host "Project: $($package.name) $($package.version)"
 Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
 Write-Host "Android SDK: $sdkPath"
 Write-Host "Android build-tools: $($buildTools.Version)"
 Write-Host "JDK: $($java.Version)"
-Write-Host 'Signing input: debug.keystore present'
-if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'key.txt') -PathType Leaf)) {
-    Write-Warning 'key.txt is absent; local real-MiMo tests will be unavailable, but Android packaging can continue.'
+Write-Host "Signing input: $([IO.Path]::GetRelativePath($projectRoot, $keystorePath)) present"
+if (-not $mimoKeyPath) {
+    Write-Warning 'The local MiMo key is absent; real-MiMo tests will be unavailable, but Android packaging can continue.'
 }
 
 if ($PreflightOnly) {
@@ -169,8 +204,10 @@ if ($PreflightOnly) {
 
 $previousJavaHome = $env:JAVA_HOME
 $previousPath = $env:PATH
+$previousKeystorePath = $env:JIZHANG_KEYSTORE_PATH
 $env:JAVA_HOME = $java.Home
 $env:PATH = "$(Join-Path $java.Home 'bin');$env:PATH"
+$env:JIZHANG_KEYSTORE_PATH = $keystorePath
 try {
     Invoke-NativeChecked -FilePath $npmCommand.Source -Arguments @('run', 'android:sync') -WorkingDirectory $projectRoot
 
@@ -236,12 +273,16 @@ try {
     }
 
     if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-        $OutputPath = Join-Path $projectRoot "jizhang-v$($package.version)-debug.apk"
+        $OutputPath = Join-Path (Join-Path $localRoot 'releases') "jizhang-v$($package.version)-debug.apk"
     }
     elseif (-not [IO.Path]::IsPathRooted($OutputPath)) {
         $OutputPath = Join-Path $projectRoot $OutputPath
     }
 
+    $outputDirectory = Split-Path -Parent $OutputPath
+    if (-not (Test-Path -LiteralPath $outputDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+    }
     Copy-Item -LiteralPath $sourceApk -Destination $OutputPath -Force
     $artifact = Get-Item -LiteralPath $OutputPath
     $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $artifact.FullName
@@ -256,4 +297,10 @@ try {
 finally {
     $env:JAVA_HOME = $previousJavaHome
     $env:PATH = $previousPath
+    if ($null -eq $previousKeystorePath) {
+        Remove-Item Env:JIZHANG_KEYSTORE_PATH -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:JIZHANG_KEYSTORE_PATH = $previousKeystorePath
+    }
 }

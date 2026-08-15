@@ -18,6 +18,10 @@ const androidBuild = read('android/app/build.gradle');
 const androidManifest = read('android/app/src/main/AndroidManifest.xml');
 const voiceInput = read('src/services/voiceInput.ts');
 const foldedCategories = read('src/services/foldedCategories.ts');
+const androidBuildScript = read('scripts/build-android-debug.ps1');
+const localPaths = read('scripts/local-paths.mjs');
+const rootTsConfig = read('tsconfig.json');
+const viteConfig = read('vite.config.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 for (const category of ['零食', '水果', 'AI服务']) {
@@ -77,5 +81,15 @@ assert.match(financialInsights, /禁止把当前不完整月份与完整月份�
 assert.match(serverRoutes, /\/api\/model\/analyze-ledger/, 'cloud mode should expose model-backed ledger analysis');
 assert.match(settings, /合并云端与本机（推荐）/, 'cloud conflicts should offer a preservation-first merge action');
 assert.match(cloudSync, /mergeFromCloud/, 'cloud sync should merge before replacing either ledger');
+assert.match(rootTsConfig, /config\/tsconfig\.app\.json/, 'secondary TypeScript configuration should live under config/');
+assert.match(rootTsConfig, /config\/tsconfig\.node\.json/, 'Node TypeScript configuration should live under config/');
+assert.equal(fs.existsSync('config/postcss.config.js'), true, 'PostCSS configuration should live under config/');
+assert.equal(fs.existsSync('postcss.config.js'), false, 'the root should not retain a duplicate PostCSS configuration');
+assert.equal(fs.existsSync('tailwind.config.js'), false, 'unused Tailwind v3 compatibility configuration should stay removed');
+assert.match(viteConfig, /postcss: path\.resolve\(process\.cwd\(\), 'config'\)/, 'Vite should explicitly load PostCSS configuration from config/');
+assert.match(viteConfig, /\.local', 'credentials', 'mimo-api-key\.txt'/, 'the dev server should prefer the local credential directory');
+assert.match(localPaths, /JIZHANG_MIMO_KEY_FILE/, 'real-MiMo tests should allow an explicit key path override');
+assert.match(androidBuildScript, /signing\\debug\.keystore/, 'Android packaging should prefer the local signing directory');
+assert.match(androidBuildScript, /Join-Path \$localRoot 'releases'/, 'Android packaging should write release artifacts under the local directory');
 
 console.log('Feature contracts verified.');

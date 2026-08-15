@@ -8,13 +8,17 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-.toolchain
 dist
 dist-ssr
 coverage
 .tmp-test
 .tmp-test-cjs
 testphoto
+
+# Local-only credentials, signing inputs, tools, archives, and release artifacts
+.local/
+.local-archive/
+.toolchain
 key.txt
 *.keystore
 *.jks
@@ -39,7 +43,6 @@ android/capacitor-cordova-android-plugins/
 jizhang-web-dist.tar
 .tmp-release/
 .playwright-cli/
-.local-archive/
 
 # Editor directories and files
 .vscode/*

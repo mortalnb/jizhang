@@ -4,6 +4,18 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 
+const resolveMimoKeyPath = () => {
+  const candidates = [
+    process.env.JIZHANG_MIMO_KEY_FILE,
+    path.resolve(process.cwd(), '.local', 'credentials', 'mimo-api-key.txt'),
+    path.resolve(process.cwd(), 'key.txt'),
+  ]
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .map(candidate => path.resolve(candidate))
+
+  return candidates.find(candidate => fs.existsSync(candidate)) ?? candidates[0]
+}
+
 const readRequestBody = (req: http.IncomingMessage) =>
   new Promise<string>((resolve, reject) => {
     let body = ''
@@ -17,13 +29,16 @@ const readRequestBody = (req: http.IncomingMessage) =>
 
 // https://vite.dev/config/
 export default defineConfig({
+  css: {
+    postcss: path.resolve(process.cwd(), 'config'),
+  },
   plugins: [
     react(),
     {
       name: 'local-mimo-key-dev-server',
       configureServer(server) {
         server.middlewares.use('/__dev_mimo_key', (_req, res) => {
-          const keyPath = path.resolve(process.cwd(), 'key.txt')
+          const keyPath = resolveMimoKeyPath()
           if (!fs.existsSync(keyPath)) {
             res.statusCode = 404
             res.end('')
@@ -39,11 +54,11 @@ export default defineConfig({
             return
           }
 
-          const keyPath = path.resolve(process.cwd(), 'key.txt')
+          const keyPath = resolveMimoKeyPath()
           const apiKey = fs.existsSync(keyPath) ? fs.readFileSync(keyPath, 'utf8').trim() : ''
           if (!apiKey) {
             res.statusCode = 401
-            res.end(JSON.stringify({ error: 'Missing local key.txt' }))
+            res.end(JSON.stringify({ error: 'Missing local MiMo key file' }))
             return
           }
 
