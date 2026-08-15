@@ -15,6 +15,8 @@ const serverRoutes = read('server/src/modelRoutes.ts');
 const settings = read('src/components/Settings.tsx');
 const cloudSync = read('src/services/cloudLedgerSync.ts');
 const androidBuild = read('android/app/build.gradle');
+const androidManifest = read('android/app/src/main/AndroidManifest.xml');
+const voiceInput = read('src/services/voiceInput.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 for (const category of ['零食', '水果', 'AI服务']) {
@@ -35,10 +37,13 @@ assert.match(transactionList, /编辑/, 'transaction details should expose an ed
 assert.match(transactionList, /overflow-y-auto/, 'long transaction details should be scrollable');
 assert.match(storage, /rawTransactions \? JSON\.parse\(rawTransactions\) : \[\]/, 'new users should start with an empty transaction list');
 assert.match(storage, /const migrated = migrateTransactions\(transactions\)/, 'existing transactions should be migrated instead of replaced');
-assert.equal(packageJson.version, '1.5.0-rc.2', 'package version should be the RC version');
-assert.match(app, /v1\.5\.0-rc\.2/, 'app header should show the RC version');
-assert.match(androidBuild, /versionCode 17/, 'Android versionCode should be 17');
-assert.match(androidBuild, /versionName "1\.5\.0-rc\.2"/, 'Android versionName should be the RC version');
+assert.equal(packageJson.version, '1.5.0-rc.3', 'package version should be the RC version');
+assert.match(app, /v1\.5\.0-rc\.3/, 'app header should show the RC version');
+assert.match(androidBuild, /versionCode 18/, 'Android versionCode should be 18');
+assert.match(androidBuild, /versionName "1\.5\.0-rc\.3"/, 'Android versionName should be the RC version');
+assert.match(androidManifest, /android\.permission\.RECORD_AUDIO/, 'Android should declare microphone capture permission');
+assert.match(androidManifest, /android\.permission\.MODIFY_AUDIO_SETTINGS/, 'Capacitor WebView audio capture should declare its normal audio-settings permission');
+assert.match(voiceInput, /系统设置 → 应用 → 记账 → 权限 → 麦克风/, 'permission denial should provide an actionable Android recovery path');
 assert.match(storage, /CURRENT_SCHEMA_VERSION = 5/, 'storage schema should be versioned');
 assert.match(storage, /getRecoveryState/, 'storage should expose read-only recovery state');
 assert.match(storage, /aiMode: 'custom'/, 'self-managed key should remain the safe default mode');

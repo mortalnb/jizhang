@@ -77,11 +77,28 @@ const bytesToDataUrl = (bytes: Uint8Array) => {
   return `data:audio/wav;base64,${btoa(binary)}`;
 };
 
+const microphoneErrorMessage = (error: unknown) => {
+  const value = error as { message?: unknown; name?: unknown };
+  const name = String(value?.name ?? '');
+  const message = String(value?.message ?? '');
+  if (name === 'NotAllowedError' || /permission denied|notallowed/i.test(message)) {
+    return '麦克风权限被拒绝。请在系统设置 → 应用 → 记账 → 权限 → 麦克风中选择“仅使用期间允许”，然后返回重试';
+  }
+  if (name === 'NotFoundError') return '未检测到可用麦克风';
+  if (name === 'NotReadableError') return '麦克风暂时不可用，请关闭正在占用麦克风的应用后重试';
+  return message || '无法访问麦克风，请检查系统权限';
+};
+
 export const startVoiceRecorder = async (): Promise<ActiveVoiceRecorder> => {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('当前设备不支持应用内录音');
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  });
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (error) {
+    throw new Error(microphoneErrorMessage(error), { cause: error });
+  }
   const AudioContextClass = window.AudioContext || (window as AudioWindow).webkitAudioContext;
   if (!AudioContextClass) {
     stream.getTracks().forEach(track => track.stop());
