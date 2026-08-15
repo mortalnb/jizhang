@@ -39,6 +39,7 @@ android/capacitor-cordova-android-plugins/
 jizhang-web-dist.tar
 .tmp-release/
 .playwright-cli/
+.local-archive/
 
 # Editor directories and files
 .vscode/*

@@ -2,7 +2,7 @@
 
 智能记账是一款本地优先的 Android 记账工具。它用 MiMo 把文字、账单截图或应用内录音整理为可核对的结构化账单；任何 AI 结果都必须经过确认才会入账。
 
-当前候选版本为 `v1.5.0-rc.4`。这是在线测试版本，尚未迁移到 `main`。RC4 在 RC3 语音权限修复基础上，将折叠父账单明确为结算容器：混合商品按明细分类统计，同时修复长商品名和重复分类按钮造成的移动端横向溢出；云端 API 仍沿用已验证的 RC2 服务。
+当前主线测试版本为 `v1.5.0-rc.4`。RC4 在 RC3 语音权限修复基础上，将折叠父账单明确为结算容器：混合商品按明细分类统计，同时修复长商品名和重复分类按钮造成的移动端横向溢出；云端 API 仍沿用已验证的 RC2 服务。
 
 ## 当前能力
 
@@ -42,28 +42,28 @@ Model: mimo-v2.5
 
 ## 安装
 
-从 GitHub Releases 下载：
+当前候选安装包文件名：
 
 ```text
 jizhang-v1.5.0-rc.4-debug.apk
 ```
+
+RC 测试包由维护者单独提供；只有明确发布的稳定版本才上传 GitHub Releases，避免把候选包误当作正式版。
 
 升级安装会保留现有应用数据；请勿先卸载旧版。首次使用应用内语音时，Android 会请求麦克风权限。
 
 详细操作见 [安装与配置](docs/SETUP.md)，数据处理边界见 [隐私政策](PRIVACY.md) 与 [免责声明](DISCLAIMER.md)。
 真实账本的聚合评估与不改写边界见 [2026-08-09 样本评估](docs/REAL_LEDGER_FINDINGS_2026-08-09.md)。
 
+根目录只保留当前安装包与构建所需的本地输入；旧安装包、测试截图、历史交接说明和真实账本快照存入被 Git 忽略的 `.local-archive/`，不得提交或部署。
+
 ## 本地开发与验证
 
 ```powershell
 npm install
-npm run test:folded-categories
-npm run test:feature
-npm run test:storage
-npm run test:analytics
-npm run lint
-npm run build
-npm run android:sync
+npm run doctor
+npm run verify
+npm run android:build
 ```
 
 真实 MiMo 验证需要项目根目录中被 Git 忽略的 `key.txt`：
@@ -86,12 +86,11 @@ npm test
 Android debug APK：
 
 ```powershell
-npm run android:sync
-Set-Location android
-.\gradlew.bat assembleDebug
+npm run doctor
+npm run android:build
 ```
 
-输出位于 `android/app/build/outputs/apk/debug/app-debug.apk`。当前 Android 元数据为 `versionCode 19`、`versionName 1.5.0-rc.4`。
+脚本从 `android/local.properties` 发现 SDK，并优先复用其同级项目工具链中的 JDK 21；无需依赖全局 `JAVA_HOME`。它会生成根目录 `jizhang-v1.5.0-rc.4-debug.apk`，并验证包名、版本、麦克风权限、v2 签名和升级证书指纹。当前 Android 元数据为 `versionCode 19`、`versionName 1.5.0-rc.4`。
 
 ## 云端部署边界
 

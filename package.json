@@ -1,10 +1,13 @@
 {
-  "name": "test2",
+  "name": "jizhang",
   "private": true,
   "version": "1.5.0-rc.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "doctor": "pwsh -NoLogo -NoProfile -NonInteractive -File scripts/build-android-debug.ps1 -PreflightOnly",
+    "test": "npm run test:folded-categories && npm run test:feature && npm run test:storage && npm run test:analytics",
+    "verify": "npm test && npm run lint && npm run build",
     "test:feature": "node scripts/verify-feature-contracts.mjs",
     "test:analytics": "node scripts/test-ledger-analytics.mjs",
     "test:folded-categories": "node scripts/test-folded-categories.mjs",
@@ -14,7 +17,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "android:sync": "npm run build && npx cap sync"
+    "android:sync": "npm run build && npx cap sync",
+    "android:build": "pwsh -NoLogo -NoProfile -NonInteractive -File scripts/build-android-debug.ps1"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.4",

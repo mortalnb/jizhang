@@ -5,7 +5,7 @@
 - 产品：智能记账
 - 当前候选版本：`v1.5.0-rc.4`
 - 形态：Android / Web，本地优先，GitHub APK 分发
-- 发布状态：独立 RC 分支在线测试；用户验收前不迁移 `main`
+- 发布状态：RC4 已通过用户手机试用，作为当前 `main` 测试基线；正式标签与 Release 另行决定
 - 模型：文字与视觉 `mimo-v2.5`，语音固定 `mimo-v2.5-asr`
 
 本版本解决三类核心问题：一段输入包含多笔消费时不再聚合；超市与电商按真实账单性质折叠；应用直接采集麦克风音频并调用 MiMo ASR。同时新增默认关闭的云端账本快照。
@@ -177,8 +177,8 @@ ParsedBatch
 - `npm run build`
 - `npm run test:mimo-aa`
 - `npm run test:mimo-batch-asr -- <wav>`
-- `npm run android:sync`
-- `gradlew assembleDebug`
+- `npm run doctor`
+- `npm run android:build`（含 SDK/JDK 预检、Gradle 构建、包名/版本/录音权限/签名验收）
 - 服务端 `prisma generate`、build、Vitest
 
 线上验证：
