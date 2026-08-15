@@ -48,7 +48,7 @@ Model: mimo-v2.5
 jizhang-v1.5.0-rc.4-debug.apk
 ```
 
-RC 测试包由维护者单独提供；只有明确发布的稳定版本才上传 GitHub Releases，避免把候选包误当作正式版。
+RC4 已作为 [GitHub Pre-release](https://github.com/mortalnb/jizhang/releases/tag/v1.5.0-rc.4) 发布，供已知风险下的升级测试；它仍是候选版，不等同于正式稳定版。
 
 升级安装会保留现有应用数据；请勿先卸载旧版。首次使用应用内语音时，Android 会请求麦克风权限。
 

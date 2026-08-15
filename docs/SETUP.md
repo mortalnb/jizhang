@@ -4,7 +4,7 @@
 
 ## 1. 升级安装
 
-1. 从本次测试渠道获取 `jizhang-v1.5.0-rc.4-debug.apk`。
+1. 从 [GitHub Releases 的 v1.5.0-rc.4 Pre-release](https://github.com/mortalnb/jizhang/releases/tag/v1.5.0-rc.4) 获取 `jizhang-v1.5.0-rc.4-debug.apk`。
 2. 直接覆盖安装旧版，不要先卸载或清除应用数据。
 3. 首次打开后先进入明细页确认旧账仍在，再导出一份账本备份。
 
