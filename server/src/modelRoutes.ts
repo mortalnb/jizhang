@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from './auth.js';
 import { withModelSlot } from './concurrency.js';
 import { config } from './config.js';
-import { callDeepseekVisionChat } from './deepseek.js';
+import { callDeepseekChat } from './deepseek.js';
 import { AppError } from './errors.js';
 import { callMimoChat, extractJsonObject, extractModelContent } from './mimo.js';
 import { buildTransactionPrompt, buildVisionPrompt, normalizeModelBatch, normalizeVisionBatch } from './modelContracts.js';
@@ -59,6 +59,9 @@ const insightResultSchema = z.object({
 
 const parseModelJson = (payload: unknown) => JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
 
+const callTextChat = (body: Parameters<typeof callMimoChat>[0], logger: Parameters<typeof callMimoChat>[1]) =>
+  config.textModelProvider === 'deepseek' ? callDeepseekChat(body, logger) : callMimoChat(body, logger);
+
 export const registerModelRoutes = (app: FastifyInstance) => {
   app.post('/api/model/parse-transaction', { preHandler: requireAuth }, async request => {
     const auth = (request as AuthenticatedRequest).auth;
@@ -67,7 +70,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     await assertModelAccess(auth.userId, input.model, endpoint);
     const startedAt = Date.now();
     try {
-      const payload = await withModelSlot('text', () => callMimoChat({
+      const payload = await withModelSlot('text', () => callTextChat({
         model: input.model,
         temperature: 0.1,
         max_completion_tokens: 4096,
@@ -77,7 +80,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           { role: 'user', content: input.text },
         ],
       }, request.log));
-      const result = validateModelResult(() => normalizeModelBatch(parseModelJson(payload), input.categories), request.log, endpoint);
+      const result = validateModelResult(() => normalizeModelBatch(parseModelJson(payload), input.categories), request.log, endpoint, config.textModelProvider);
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
     } catch (error) {
@@ -112,7 +115,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
         ],
       };
       const payload = await withModelSlot('image', () => provider === 'deepseek'
-        ? callDeepseekVisionChat(body, request.log)
+        ? callDeepseekChat(body, request.log)
         : callMimoChat(body, request.log, { timeoutMs: 180_000 }));
       const result = validateModelResult(() => normalizeVisionBatch(parseModelJson(payload), input.categories), request.log, endpoint, provider);
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
@@ -152,7 +155,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     await assertModelAccess(auth.userId, input.model, endpoint);
     const startedAt = Date.now();
     try {
-      const payload = await withModelSlot('text', () => callMimoChat({
+      const payload = await withModelSlot('text', () => callTextChat({
         model: input.model,
         temperature: 0.2,
         max_completion_tokens: 2048,
@@ -165,7 +168,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           { role: 'user', content: JSON.stringify({ financialFacts: input.financialFacts, monthSummaries: input.monthSummaries, recentTransactions: input.recentTransactions, requirements: input.requirements }) },
         ],
       }, request.log));
-      const result = validateModelResult(() => insightResultSchema.parse(parseModelJson(payload)), request.log, endpoint);
+      const result = validateModelResult(() => insightResultSchema.parse(parseModelJson(payload)), request.log, endpoint, config.textModelProvider);
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
     } catch (error) {
@@ -180,9 +183,9 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     const endpoint = 'test-capability';
     await assertModelAccess(auth.userId, input.model, endpoint);
     const startedAt = Date.now();
-    const transparentPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+    const transparentPixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
     try {
-      const payload = await withModelSlot('text', () => callMimoChat({
+      const payload = await withModelSlot('text', () => callTextChat({
         model: input.model,
         temperature: 0.1,
         max_completion_tokens: 1024,
@@ -192,7 +195,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           { role: 'user', content: [{ type: 'text', text: '确认 JSON 和图片能力。' }, { type: 'image_url', image_url: { url: transparentPixel } }] },
         ],
       }, request.log));
-      const parsed = validateModelResult(() => parseModelJson(payload), request.log, endpoint) as Record<string, unknown>;
+      const parsed = validateModelResult(() => parseModelJson(payload), request.log, endpoint, config.textModelProvider) as Record<string, unknown>;
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result: { ...parsed, audio: true } };
     } catch (error) {

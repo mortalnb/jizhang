@@ -1,10 +1,28 @@
 import { readFileSync } from 'node:fs';
+import { crc32, inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { buildTransactionPrompt, buildVisionPrompt, normalizeModelBatch, normalizeVisionBatch } from './modelContracts.js';
 import { checksumLedgerPayload, ledgerUpdateSchema } from './ledgerContracts.js';
 import { extractModelContent } from './mimo.js';
 
 const categories = ['餐费', '饮料', '交通', '日用', '其他'];
+
+it('sends a valid PNG fixture during cloud capability testing', () => {
+  const routes = readFileSync(new URL('./modelRoutes.ts', import.meta.url), 'utf8');
+  const encoded = routes.match(/transparentPixel = 'data:image\/png;base64,([^']+)'/)?.[1];
+  expect(encoded).toBeDefined();
+  const png = Buffer.from(encoded!, 'base64');
+  expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const imageData: Buffer[] = [];
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset);
+    const chunk = png.subarray(offset + 4, offset + 8 + length);
+    expect(crc32(chunk)).toBe(png.readUInt32BE(offset + 8 + length));
+    if (chunk.subarray(0, 4).toString() === 'IDAT') imageData.push(chunk.subarray(4));
+    offset += 12 + length;
+  }
+  expect(inflateSync(Buffer.concat(imageData))).toHaveLength(3);
+});
 
 describe('batch transaction contract', () => {
   it('preserves different dates as independent transactions', () => {

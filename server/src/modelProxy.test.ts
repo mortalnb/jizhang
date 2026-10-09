@@ -17,6 +17,7 @@ import { assertModelAccess, recordUsage } from './quota.js';
 let app: FastifyInstance;
 beforeEach(() => {
   config.billImageProvider = 'mimo';
+  config.textModelProvider = 'mimo';
   config.deepseekApiKey = undefined;
   vi.mocked(assertModelAccess).mockReset();
   vi.mocked(recordUsage).mockClear();
@@ -26,6 +27,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   config.billImageProvider = 'mimo';
+  config.textModelProvider = 'mimo';
   config.deepseekApiKey = undefined;
   await app.close();
   vi.unstubAllGlobals();
@@ -188,5 +190,155 @@ describe('old APK proxy authorization and response contract', () => {
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ success: true, endpoint: 'recognize-bill-image', model: 'mimo-v2.5' }));
     expect(timerSpy.mock.calls.some(([, deadline]) => deadline === 180_000)).toBe(true);
     timerSpy.mockRestore();
+  });
+});
+
+const textRouteCases = [
+  {
+    endpoint: 'parse-transaction',
+    payload: input,
+    content: { transactions: [{ amount: 18, category: '饮料', description: '咖啡', date: '2026-10-09' }] },
+    expected: { transactions: [{ amount: 18, category: '饮料', description: '咖啡', date: '2026-10-09' }] },
+    maxTokens: 4096,
+    temperature: 0.1,
+  },
+  {
+    endpoint: 'analyze-ledger',
+    payload: {
+      model: 'mimo-v2.5', financialFacts: { budget: 3000, totalSpent: 18 }, monthSummaries: [],
+      recentTransactions: [{ amount: 18, category: '饮料', description: '咖啡', date: '2026-10-09' }],
+      requirements: ['只使用已提供的数据。'],
+    },
+    content: { insights: [{ title: '已记录支出', body: '已记录18元支出。', tone: 'info' }] },
+    expected: { insights: [{ title: '已记录支出', body: '已记录18元支出。', tone: 'info' }] },
+    maxTokens: 2048,
+    temperature: 0.2,
+  },
+  {
+    endpoint: 'test-capability',
+    payload: { model: 'mimo-v2.5' },
+    content: { text: true, json: true, vision: true },
+    expected: { text: true, json: true, vision: true, audio: true },
+    maxTokens: 1024,
+    temperature: 0.1,
+  },
+];
+
+describe('server-selected text provider', () => {
+  beforeEach(() => {
+    config.textModelProvider = 'deepseek';
+    config.billImageProvider = 'deepseek';
+    config.deepseekApiKey = 'vitest-only-deepseek-key';
+  });
+
+  it.each(textRouteCases)('routes $endpoint to DeepSeek with old APK response, authorization, and one usage record', async testCase => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      model: 'deepseek-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(testCase.content) } }],
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: `/api/model/${testCase.endpoint}`, payload: testCase.payload });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result).toMatchObject(testCase.expected);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).toMatchObject({
+      model: 'deepseek-flash', thinking: { type: 'disabled' }, response_format: { type: 'json_object' },
+      max_tokens: testCase.maxTokens, temperature: testCase.temperature,
+    });
+    expect(fetchMock.mock.calls[0][1].body).not.toMatch(/vitest-only-deepseek-key|max_completion_tokens|top_p/);
+    expect(assertModelAccess).toHaveBeenCalledOnce();
+    expect(assertModelAccess).toHaveBeenCalledWith('test-user', 'mimo-v2.5', testCase.endpoint);
+    expect(recordUsage).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
+      success: true, endpoint: testCase.endpoint, model: 'mimo-v2.5', userId: 'test-user',
+    }));
+  });
+
+  it('selects capability testing by the text provider even if the image provider is MiMo', async () => {
+    config.billImageProvider = 'mimo';
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: '{"text":true,"json":true,"vision":true}' } }],
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: '/api/model/test-capability', payload: { model: 'mimo-v2.5' } });
+    expect(response.statusCode).toBe(200);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions');
+    expect(recordUsage).toHaveBeenCalledOnce();
+  });
+
+  it.each(textRouteCases)('keeps original authorization ahead of $endpoint provider selection', async testCase => {
+    vi.mocked(assertModelAccess).mockRejectedValue(new AppError(403, 'model_not_allowed', 'This model is not allowed for this account'));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: `/api/model/${testCase.endpoint}`, payload: testCase.payload });
+    expect(response.statusCode).toBe(403);
+    expect(assertModelAccess).toHaveBeenCalledWith('test-user', 'mimo-v2.5', testCase.endpoint);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(recordUsage).not.toHaveBeenCalled();
+  });
+
+  it.each(textRouteCases)('records one safe upstream failure for $endpoint without exposing provider details', async testCase => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('PRIVATE_UPSTREAM_ERROR vitest-only-deepseek-key', { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: `/api/model/${testCase.endpoint}`, payload: testCase.payload });
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error.code).toBe('deepseek_http_error');
+    expect(response.body).not.toMatch(/PRIVATE_|vitest-only-deepseek-key/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
+      success: false, endpoint: testCase.endpoint, model: 'mimo-v2.5', errorCode: 'deepseek_http_error',
+    }));
+  });
+
+  it.each(textRouteCases)('rejects incomplete $endpoint structured output with the selected provider error code', async testCase => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ finish_reason: 'length', message: { content: '{"PRIVATE_PARTIAL":' } }],
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: `/api/model/${testCase.endpoint}`, payload: testCase.payload });
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error.code).toBe('deepseek_invalid_result');
+    expect(response.body).not.toContain('PRIVATE_');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
+      success: false, endpoint: testCase.endpoint, errorCode: 'deepseek_invalid_result',
+    }));
+  });
+
+  it('converts text provider network details into one safe recorded failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('PRIVATE_SOCKET vitest-only-deepseek-key'));
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: '/api/model/parse-transaction', payload: input });
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error.code).toBe('deepseek_network_error');
+    expect(response.body).not.toMatch(/PRIVATE_|vitest-only-deepseek-key/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ success: false, errorCode: 'deepseek_network_error' }));
+  });
+
+  it('keeps ASR on MiMo when both text and images use DeepSeek', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { audio: { transcript: '今天买咖啡十八元' } } }],
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: '/api/model/transcribe-audio', payload: {
+      model: 'mimo-v2.5-asr', durationSeconds: 1, audioDataUrl: 'data:audio/wav;base64,' + 'x'.repeat(100),
+    } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result).toEqual({ text: '今天买咖啡十八元' });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.xiaomimimo.com/v1/chat/completions');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.model).toBe('mimo-v2.5-asr');
+    expect(body).not.toHaveProperty('thinking');
+    expect(assertModelAccess).toHaveBeenCalledWith('test-user', 'mimo-v2.5-asr', 'transcribe-audio');
+    expect(recordUsage).toHaveBeenCalledOnce();
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({
+      success: true, endpoint: 'transcribe-audio', model: 'mimo-v2.5-asr', audioSeconds: 1,
+    }));
   });
 });

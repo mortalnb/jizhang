@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./config.js', () => ({ config: { deepseekApiKey: 'unit-test-deepseek-key' } }));
 
 import { config } from './config.js';
-import { callDeepseekVisionChat } from './deepseek.js';
+import { callDeepseekChat } from './deepseek.js';
 
 afterEach(() => {
   config.deepseekApiKey = 'unit-test-deepseek-key';
@@ -34,11 +34,18 @@ const mockResponse = (payload: unknown) => {
   return fetchMock;
 };
 
-describe('dedicated DeepSeek image provider', () => {
-  it('uses the verified official model and image parameters without forwarding MiMo settings or mutating input', async () => {
+const assertSafeFailure = async (promise: Promise<unknown>, expected: Record<string, unknown>) => {
+  const failure = await promise.catch(error => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).toMatchObject(expected);
+  if (failure instanceof Error) expect(failure.message).not.toMatch(/PRIVATE_|unit-test-deepseek-key/);
+};
+
+describe('server-selected DeepSeek chat provider', () => {
+  it('maps caller token and temperature settings while preserving original image detail without mutating input', async () => {
     const fetchMock = mockResponse({ model: 'deepseek-flash', choices: [] });
     const original = JSON.parse(JSON.stringify(input));
-    expect(await callDeepseekVisionChat(input)).toEqual({ model: 'deepseek-flash', choices: [] });
+    expect(await callDeepseekChat(input)).toEqual({ model: 'deepseek-flash', choices: [] });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions');
     const request = fetchMock.mock.calls[0][1];
@@ -46,8 +53,8 @@ describe('dedicated DeepSeek image provider', () => {
     expect(JSON.parse(request.body)).toEqual({
       model: 'deepseek-flash',
       thinking: { type: 'disabled' },
-      temperature: 0.1,
-      max_tokens: 4096,
+      temperature: 0.9,
+      max_tokens: 8192,
       response_format: { type: 'json_object' },
       messages: [
         input.messages[0],
@@ -61,6 +68,25 @@ describe('dedicated DeepSeek image provider', () => {
     expect(input).toEqual(original);
   });
 
+  it.each([undefined, { max_completion_tokens: 2048, temperature: 0.2 }])('preserves text-only messages with caller settings=%s', async settings => {
+    const fetchMock = mockResponse({ model: 'deepseek-flash', choices: [] });
+    const messages = [
+      { role: 'system', content: 'PRIVATE_TEXT_PROMPT' },
+      { role: 'user', content: 'PRIVATE_TEXT_INPUT' },
+    ];
+    const logger = { info: vi.fn() };
+    await callDeepseekChat({ model: 'mimo-v2.5', messages, ...settings }, logger);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const request = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(request).toEqual({
+      model: 'deepseek-flash', messages, thinking: { type: 'disabled' },
+      max_tokens: settings?.max_completion_tokens ?? 4096,
+      temperature: settings?.temperature ?? 0.1,
+      response_format: { type: 'json_object' },
+    });
+    expect(JSON.stringify(logger.info.mock.calls)).not.toMatch(/PRIVATE_|unit-test-deepseek-key|Authorization/);
+  });
+
   it.each(['stop', 'length', 'aborted', 'insufficient_system_resource'])('logs only filtered provider metadata with finishReason=%s', async finishReason => {
     mockResponse({
       model: 'deepseek-flash',
@@ -68,7 +94,7 @@ describe('dedicated DeepSeek image provider', () => {
       usage: { prompt_tokens: 240, completion_tokens: 400, completion_tokens_details: { reasoning_tokens: 0 } },
     });
     const logger = { info: vi.fn() };
-    await callDeepseekVisionChat(input, logger);
+    await callDeepseekChat(input, logger);
     expect(logger.info.mock.calls[0][0]).toEqual({
       event: 'deepseek_response', provider: 'deepseek', requestedModel: 'mimo-v2.5', effectiveModel: 'deepseek-flash',
       durationMs: expect.any(Number), responseModel: 'deepseek-flash', finishReason,
@@ -84,7 +110,7 @@ describe('dedicated DeepSeek image provider', () => {
       usage: { prompt_tokens: -1, completion_tokens: 0.5, completion_tokens_details: { reasoning_tokens: '2' } },
     });
     const logger = { info: vi.fn() };
-    await callDeepseekVisionChat(input, logger);
+    await callDeepseekChat(input, logger);
     expect(logger.info.mock.calls[0][0]).toMatchObject({
       responseModel: undefined, finishReason: undefined,
       promptTokens: undefined, completionTokens: undefined, reasoningTokens: undefined,
@@ -95,7 +121,7 @@ describe('dedicated DeepSeek image provider', () => {
   it.each([null, { choices: null, usage: 'unexpected' }])('handles malformed metadata without exposing raw payloads', async payload => {
     mockResponse(payload);
     const logger = { info: vi.fn() };
-    expect(await callDeepseekVisionChat(input, logger)).toEqual(payload);
+    expect(await callDeepseekChat(input, logger)).toEqual(payload);
     expect(logger.info).toHaveBeenCalledOnce();
   });
 
@@ -103,8 +129,8 @@ describe('dedicated DeepSeek image provider', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('PRIVATE_PROVIDER_ERROR unit-test-deepseek-key', { status }));
     vi.stubGlobal('fetch', fetchMock);
     const logger = { info: vi.fn() };
-    await expect(callDeepseekVisionChat(input, logger)).rejects.toMatchObject({
-      statusCode: 502, code: 'deepseek_http_error', message: 'Image recognition provider returned an HTTP error',
+    await assertSafeFailure(callDeepseekChat(input, logger), {
+      statusCode: 502, code: 'deepseek_http_error',
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(logger.info.mock.calls[0][0]).toMatchObject({ event: 'deepseek_failure', provider: 'deepseek', upstreamStatus: status, errorCode: 'deepseek_http_error' });
@@ -115,8 +141,8 @@ describe('dedicated DeepSeek image provider', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('PRIVATE_INVALID_JSON unit-test-deepseek-key'));
     vi.stubGlobal('fetch', fetchMock);
     const logger = { info: vi.fn() };
-    await expect(callDeepseekVisionChat(input, logger)).rejects.toMatchObject({
-      statusCode: 502, code: 'deepseek_invalid_json', message: 'Image recognition provider returned invalid JSON',
+    await assertSafeFailure(callDeepseekChat(input, logger), {
+      statusCode: 502, code: 'deepseek_invalid_json',
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(JSON.stringify(logger.info.mock.calls)).not.toMatch(/PRIVATE_|unit-test-deepseek-key/);
@@ -126,8 +152,8 @@ describe('dedicated DeepSeek image provider', () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('PRIVATE_SOCKET unit-test-deepseek-key'));
     vi.stubGlobal('fetch', fetchMock);
     const logger = { info: vi.fn() };
-    await expect(callDeepseekVisionChat(input, logger)).rejects.toMatchObject({
-      statusCode: 502, code: 'deepseek_network_error', message: 'Image recognition provider request failed',
+    await assertSafeFailure(callDeepseekChat(input, logger), {
+      statusCode: 502, code: 'deepseek_network_error',
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(JSON.stringify(logger.info.mock.calls)).not.toMatch(/PRIVATE_|unit-test-deepseek-key/);
@@ -140,9 +166,9 @@ describe('dedicated DeepSeek image provider', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
     const logger = { info: vi.fn() };
-    const pending = callDeepseekVisionChat(input, logger);
-    const rejected = expect(pending).rejects.toMatchObject({
-      statusCode: 504, code: 'deepseek_timeout', message: 'Image recognition provider request timed out',
+    const pending = callDeepseekChat(input, logger);
+    const rejected = assertSafeFailure(pending, {
+      statusCode: 504, code: 'deepseek_timeout',
     });
     await vi.advanceTimersByTimeAsync(89_999);
     expect(logger.info).not.toHaveBeenCalled();
@@ -157,15 +183,15 @@ describe('dedicated DeepSeek image provider', () => {
   it('clears its deadline after success', async () => {
     vi.useFakeTimers();
     mockResponse({ model: 'deepseek-flash' });
-    await callDeepseekVisionChat(input);
+    await callDeepseekChat(input);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('fails without issuing a provider request when the image key is unavailable', async () => {
+  it('fails without issuing a provider request when the chat key is unavailable', async () => {
     config.deepseekApiKey = undefined;
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    await expect(callDeepseekVisionChat(input)).rejects.toMatchObject({ code: 'deepseek_not_configured', statusCode: 503 });
+    await assertSafeFailure(callDeepseekChat(input), { code: 'deepseek_not_configured', statusCode: 503 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
