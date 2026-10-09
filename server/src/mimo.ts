@@ -33,7 +33,7 @@ const responseMetadata = (payload: unknown) => {
   };
 };
 
-export const callMimoChat = async (body: ChatRequest, logger?: Pick<FastifyBaseLogger, 'info'>) => {
+export const callMimoChat = async (body: ChatRequest, logger?: Pick<FastifyBaseLogger, 'info'>, options: { timeoutMs?: number } = {}) => {
   // Authorize the APK's requested name in the route before resolving this alias.
   const effectiveModel = body.model === 'mimo-v2.5' ? 'mimo-v2.6-flash' : body.model;
   const upstreamBody = {
@@ -42,8 +42,10 @@ export const callMimoChat = async (body: ChatRequest, logger?: Pick<FastifyBaseL
     ...(effectiveModel === 'mimo-v2.6-flash' ? { thinking: { type: 'disabled' } } : {}),
   };
   const startedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? 90_000;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 90_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let upstreamStatus: number | undefined;
   try {
     const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
       method: 'POST',
@@ -54,6 +56,7 @@ export const callMimoChat = async (body: ChatRequest, logger?: Pick<FastifyBaseL
       },
       body: JSON.stringify(upstreamBody),
     });
+    upstreamStatus = response.status;
     const text = await response.text();
     if (!response.ok) throw new AppError(502, 'mimo_http_error', `MiMo request failed with HTTP ${response.status}`);
     let payload: unknown;
@@ -71,6 +74,11 @@ export const callMimoChat = async (body: ChatRequest, logger?: Pick<FastifyBaseL
     }, 'MiMo response metadata');
     return payload;
   } catch (error) {
+    logger?.info({
+      event: 'mimo_failure', requestedModel: body.model, effectiveModel,
+      durationMs: Date.now() - startedAt, timeoutMs, upstreamStatus,
+      errorCode: error instanceof AppError ? error.code : error instanceof Error && error.name === 'AbortError' ? 'mimo_timeout' : 'mimo_network_error',
+    }, 'MiMo request failed');
     if (error instanceof AppError) throw error;
     if (error instanceof Error && error.name === 'AbortError') throw new AppError(504, 'mimo_timeout', 'MiMo request timed out');
     throw error;

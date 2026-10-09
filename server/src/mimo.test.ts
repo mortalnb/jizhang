@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { callMimoChat } from './mimo.js';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -84,5 +85,31 @@ describe('MiMo proxy compatibility', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(callMimoChat({ model: 'mimo-v2.5', messages: [] })).rejects.toMatchObject({ code: 'mimo_http_error', statusCode: 502 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([undefined, 180_000])('aborts at the selected deadline (%s) without retrying or exposing upstream content', async timeoutMs => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_url: string, options: RequestInit) => new Promise((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () => reject(new DOMException('PRIVATE_NETWORK_DETAIL', 'AbortError')), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const logger = { info: vi.fn() };
+    const promise = callMimoChat({ model: 'mimo-v2.5', messages: [{ role: 'user', content: 'PRIVATE_IMAGE' }] }, logger, { timeoutMs });
+    const rejected = expect(promise).rejects.toMatchObject({ code: 'mimo_timeout', statusCode: 504 });
+    await vi.advanceTimersByTimeAsync((timeoutMs ?? 90_000) - 1);
+    expect(logger.info).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(logger.info.mock.calls[0][0]).toMatchObject({ event: 'mimo_failure', durationMs: timeoutMs ?? 90_000, timeoutMs: timeoutMs ?? 90_000, errorCode: 'mimo_timeout' });
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('PRIVATE_');
+  });
+
+  it('logs HTTP status without provider error bodies', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('PRIVATE_PROVIDER_ERROR', { status: 429 })));
+    const logger = { info: vi.fn() };
+    await expect(callMimoChat({ model: 'mimo-v2.5', messages: [] }, logger)).rejects.toMatchObject({ code: 'mimo_http_error' });
+    expect(logger.info.mock.calls[0][0]).toMatchObject({ event: 'mimo_failure', upstreamStatus: 429, errorCode: 'mimo_http_error' });
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('PRIVATE_');
   });
 });

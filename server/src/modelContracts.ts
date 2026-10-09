@@ -34,9 +34,20 @@ const transactionSchema = z.object({
   splitItems: z.preprocess(value => Array.isArray(value) ? value : undefined, z.array(splitItemSchema).max(250).optional()),
 });
 
+const visionTransactionSchema = transactionSchema.extend({
+  date: z.preprocess(
+    value => value === null || typeof value === 'string' && !value.trim() ? undefined : value,
+    transactionSchema.shape.date.optional(),
+  ),
+});
+
 const batchSchema = z.object({
   transactions: z.array(transactionSchema).min(1).max(80),
   warnings: z.preprocess(value => Array.isArray(value) ? value.filter(item => typeof item === 'string') : undefined, z.array(z.string().max(300)).max(30).optional()),
+});
+
+const visionBatchSchema = batchSchema.extend({
+  transactions: z.array(visionTransactionSchema).min(1).max(80),
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -73,30 +84,40 @@ const normalizeLooseTransaction = (value: unknown, categories: string[]) => {
   };
 };
 
-export const normalizeModelBatch = (value: unknown, categories: string[]) => {
+const normalizeBatchInput = (value: unknown, categories: string[]) => {
   if (!isRecord(value)) throw new Error('model result is not an object');
   const transactions = (Array.isArray(value.transactions) ? value.transactions : [value]).map(transaction => normalizeLooseTransaction(transaction, categories));
-  const parsed = batchSchema.parse({ transactions, warnings: value.warnings });
+  return { transactions, warnings: value.warnings };
+};
+
+const normalizeParsedTransaction = <T extends z.infer<typeof visionTransactionSchema>>(transaction: T, categories: string[]) => ({
+  ...transaction,
+  category: allowedCategory(transaction.category, categories),
+  grouping: transaction.splitItems?.length ? 'folded' as const : transaction.grouping ?? 'separate' as const,
+  splitItems: transaction.splitItems?.map(item => ({ ...item, category: allowedCategory(item.category, categories) })),
+});
+
+export const normalizeModelBatch = (value: unknown, categories: string[]) => {
+  const parsed = batchSchema.parse(normalizeBatchInput(value, categories));
   return {
     ...parsed,
-    transactions: parsed.transactions.map(transaction => ({
-      ...transaction,
-      category: allowedCategory(transaction.category, categories),
-      grouping: transaction.splitItems?.length ? 'folded' as const : transaction.grouping ?? 'separate' as const,
-      splitItems: transaction.splitItems?.map(item => ({ ...item, category: allowedCategory(item.category, categories) })),
-    })),
+    transactions: parsed.transactions.map(transaction => normalizeParsedTransaction(transaction, categories)),
   };
 };
 
 export const normalizeVisionBatch = (value: unknown, categories: string[]) => {
   if (!isRecord(value)) throw new Error('vision result is not an object');
-  const batch = normalizeModelBatch(value, categories);
+  const batch = visionBatchSchema.parse(normalizeBatchInput(value, categories));
+  const unknownDateCount = batch.transactions.filter(transaction => transaction.date === undefined).length;
+  const warnings = unknownDateCount
+    ? [`日期待确认：${unknownDateCount} 笔账单未识别到日期，请在确认页核对日期。`, ...(batch.warnings ?? [])].slice(0, 30)
+    : batch.warnings;
   return {
     amount: Number(value.amount) || Number(batch.transactions.reduce((sum, transaction) => sum + transaction.amount, 0).toFixed(2)),
     source: typeof value.source === 'string' ? value.source : 'generic',
     sourceLabel: typeof value.sourceLabel === 'string' ? value.sourceLabel : undefined,
-    transactions: batch.transactions,
-    warnings: batch.warnings,
+    transactions: batch.transactions.map(transaction => normalizeParsedTransaction(transaction, categories)),
+    warnings,
   };
 };
 
@@ -115,8 +136,13 @@ AA 或多人分摊只记录用户最终承担净支出，作为单笔 transactio
 export const buildVisionPrompt = (categories: string[], today: string) =>
   `你是记账截图识别助手。只返回 JSON，最外层字段：source, sourceLabel, amount, transactions, warnings。` +
   `transactions 每笔字段：amount, category, description, detail, date, tag, merchant, orderId, grouping, splitItems；不要返回 paymentMethod；splitItems 每项字段：amount, category, description, detail, quantity。` +
+  `transactions 必须有 1 至 80 笔；每笔 amount 和商品 amount 必须是非负有限数字，金额不可留空或填 null，无法确认时不得猜测。` +
+  `每笔和每项商品的 description 必须是 1 至 120 字的凝练标题；父级 detail 最多 1500 字，商品 detail 最多 1000 字；商品 quantity 是最多 80 字的数量单位字符串。` +
+  `紧凑输出 JSON；detail 只补充优惠、包装费或需核对的信息，不重复 description、amount、quantity，其他信息已足够时省略 detail。保留所有可见商品，不为缩短输出删减商品。` +
+  `date 只有在截图可明确确定完整日期时才返回 YYYY-MM-DD；看不到完整日期时省略 date 或返回 null，不能用今天代替或猜测年份。已知日期不得返回其他格式。` +
+  `tag 最多 40 字；merchant 和 orderId 最多 120 字；grouping 只能为 folded 或 separate；每笔 splitItems 最多 250 项，无商品明细时省略或返回空数组。warnings 最多 30 条，每条最多 300 字。` +
   `category 必须属于：${categories.join(', ')}。` +
   `盒马、沃尔玛、山姆或其他超市的一张小票/一次结账必须返回一笔 transaction，grouping=folded，逐商品放入 splitItems；父级 amount 是优惠后的实际支付总额，quantity 保留数量和单位。` +
   `淘宝/天猫同一订单的商品可折叠；订单列表中的多个订单、不同日期或多次实付款必须返回多笔 transactions，绝不能合并金额。` +
   `tag 是整笔交易可选的单一场景标签，只能返回 0 或 1 个短词，禁止数组、逗号分隔和 # 前缀；merchant 只填明确可见的品牌或平台。` +
-  `看不到的字段留空，不得编造。今天是 ${today}。`;
+  `看不到的可选字段省略或返回 null，不得编造；source 返回 hema、walmart、taobao 或 generic，sourceLabel 为来源名称。今天是 ${today}，仅作相对日期参考。`;

@@ -5,6 +5,7 @@ import { withModelSlot } from './concurrency.js';
 import { AppError } from './errors.js';
 import { callMimoChat, extractJsonObject, extractModelContent } from './mimo.js';
 import { buildTransactionPrompt, buildVisionPrompt, normalizeModelBatch, normalizeVisionBatch } from './modelContracts.js';
+import { validateModelResult } from './modelValidation.js';
 import { assertModelAccess, recordUsage } from './quota.js';
 import { todayISOChina } from './time.js';
 import type { AuthenticatedRequest } from './types.js';
@@ -56,13 +57,6 @@ const insightResultSchema = z.object({
 
 const parseModelJson = (payload: unknown) => JSON.parse(extractJsonObject(extractModelContent(payload))) as unknown;
 
-const validated = <T>(work: () => T) => {
-  try {
-    return work();
-  } catch {
-    throw new AppError(502, 'mimo_invalid_result', 'MiMo returned a result that does not match the ledger contract');
-  }
-};
 export const registerModelRoutes = (app: FastifyInstance) => {
   app.post('/api/model/parse-transaction', { preHandler: requireAuth }, async request => {
     const auth = (request as AuthenticatedRequest).auth;
@@ -81,7 +75,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           { role: 'user', content: input.text },
         ],
       }, request.log));
-      const result = validated(() => normalizeModelBatch(parseModelJson(payload), input.categories));
+      const result = validateModelResult(() => normalizeModelBatch(parseModelJson(payload), input.categories), request.log, endpoint);
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
     } catch (error) {
@@ -113,8 +107,8 @@ export const registerModelRoutes = (app: FastifyInstance) => {
             ],
           },
         ],
-      }, request.log));
-      const result = validated(() => normalizeVisionBatch(parseModelJson(payload), input.categories));
+      }, request.log, { timeoutMs: 180_000 }));
+      const result = validateModelResult(() => normalizeVisionBatch(parseModelJson(payload), input.categories), request.log, endpoint);
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
     } catch (error) {
@@ -160,12 +154,12 @@ export const registerModelRoutes = (app: FastifyInstance) => {
         messages: [
           {
             role: 'system',
-            content: '你是私人记账分析助手。只允许引用输入 JSON 中明确存在的数据，不估算、不补全、不编造。禁止把不完整月份与完整月份直接比较，不分析商户，不推断消费动机、因果或价值判断。必须返回 JSON：{"insights":[{"title":"短标题","body":"一句具体分析或建议","tone":"info|warn|success"}]}。',
+            content: '你是私人记账分析助手。只允许引用输入 JSON 中明确存在的数据，不估算、不补全、不编造。禁止把不完整月份与完整月份直接比较，不分析商户，不推断消费动机、因果或价值判断。必须返回 JSON：{"insights":[{"title":"短标题","body":"一句具体分析或建议","tone":"info"}]}。insights 返回 1 至 5 条；title 为 1 至 24 个字符，body 为 1 至 180 个字符；tone 只能是 info、warn、success 之一，不能返回带竖线的选项字符串。',
           },
           { role: 'user', content: JSON.stringify({ financialFacts: input.financialFacts, monthSummaries: input.monthSummaries, recentTransactions: input.recentTransactions, requirements: input.requirements }) },
         ],
       }, request.log));
-      const result = validated(() => insightResultSchema.parse(parseModelJson(payload)));
+      const result = validateModelResult(() => insightResultSchema.parse(parseModelJson(payload)), request.log, endpoint);
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
     } catch (error) {
@@ -192,7 +186,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           { role: 'user', content: [{ type: 'text', text: '确认 JSON 和图片能力。' }, { type: 'image_url', image_url: { url: transparentPixel } }] },
         ],
       }, request.log));
-      const parsed = validated(() => parseModelJson(payload)) as Record<string, unknown>;
+      const parsed = validateModelResult(() => parseModelJson(payload), request.log, endpoint) as Record<string, unknown>;
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result: { ...parsed, audio: true } };
     } catch (error) {
