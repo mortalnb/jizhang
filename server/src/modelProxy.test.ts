@@ -10,11 +10,14 @@ vi.mock('./auth.js', () => ({
 vi.mock('./quota.js', () => ({ assertModelAccess: vi.fn(), recordUsage: vi.fn().mockResolvedValue({}) }));
 
 import { AppError, sendError } from './errors.js';
+import { config } from './config.js';
 import { registerModelRoutes } from './modelRoutes.js';
 import { assertModelAccess, recordUsage } from './quota.js';
 
 let app: FastifyInstance;
 beforeEach(() => {
+  config.billImageProvider = 'mimo';
+  config.deepseekApiKey = undefined;
   vi.mocked(assertModelAccess).mockReset();
   vi.mocked(recordUsage).mockClear();
   app = Fastify();
@@ -22,9 +25,100 @@ beforeEach(() => {
   registerModelRoutes(app);
 });
 afterEach(async () => {
+  config.billImageProvider = 'mimo';
+  config.deepseekApiKey = undefined;
   await app.close();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+const imageInput = { model: 'mimo-v2.5', categories: ['饮料', '其他'], imageDataUrl: 'data:image/jpeg;base64,' + 'x'.repeat(100) };
+const visionResponse = () => new Response(JSON.stringify({
+  model: 'deepseek-flash', choices: [{ finish_reason: 'stop', message: {
+    content: JSON.stringify({ source: 'hema', transactions: [{
+      amount: 48, category: '其他', description: '盒马采购',
+      splitItems: [
+        { amount: 9.59, category: '其他', description: '米布', quantity: '1组' },
+        { amount: 17.51, category: '饮料', description: '果汁', quantity: '1瓶' },
+        { amount: 19.9, category: '饮料', description: '牛奶', quantity: '1组' },
+      ],
+    }] }),
+  } }],
+}));
+
+describe('server-selected image provider', () => {
+  beforeEach(() => {
+    config.billImageProvider = 'deepseek';
+    config.deepseekApiKey = 'vitest-only-deepseek-key';
+  });
+
+  it('sends the original screenshot to DeepSeek and keeps the old APK draft and accounting contract', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(visionResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: '/api/model/recognize-bill-image', payload: imageInput });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.transactions[0]).toMatchObject({ amount: 48, grouping: 'folded' });
+    expect(response.json().result.transactions[0].splitItems).toHaveLength(3);
+    expect(response.json().result.transactions[0]).not.toHaveProperty('date');
+    expect(response.json().result.warnings[0]).toContain('日期待确认');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.model).toBe('deepseek-flash');
+    expect(body.messages[1].content[1].image_url).toEqual({ url: imageInput.imageDataUrl, detail: 'original' });
+    expect(assertModelAccess).toHaveBeenCalledWith('test-user', 'mimo-v2.5', 'recognize-bill-image');
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ success: true, endpoint: 'recognize-bill-image', model: 'mimo-v2.5' }));
+  });
+
+  it('continues routing text and audio to MiMo when only images use DeepSeek', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ transactions: [{ amount: 18, category: '饮料', description: '咖啡', date: '2026-10-09' }] }) } }],
+    }))).mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { audio: { transcript: '今天买咖啡十八元' } } }] })));
+    vi.stubGlobal('fetch', fetchMock);
+    const text = await app.inject({ method: 'POST', url: '/api/model/parse-transaction', payload: input });
+    const audio = await app.inject({ method: 'POST', url: '/api/model/transcribe-audio', payload: {
+      model: 'mimo-v2.5-asr', durationSeconds: 1, audioDataUrl: 'data:audio/wav;base64,' + 'x'.repeat(100),
+    } });
+    expect(text.statusCode).toBe(200);
+    expect(audio.statusCode).toBe(200);
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual([
+      'https://api.xiaomimimo.com/v1/chat/completions', 'https://api.xiaomimimo.com/v1/chat/completions',
+    ]);
+    expect(fetchMock.mock.calls.map(call => JSON.parse(call[1].body).model)).toEqual(['mimo-v2.6-flash', 'mimo-v2.5-asr']);
+  });
+
+  it.each(['mimo', 'deepseek'] as const)('checks original image authorization before calling %s', async provider => {
+    config.billImageProvider = provider;
+    vi.mocked(assertModelAccess).mockRejectedValue(new AppError(403, 'model_not_allowed', 'This model is not allowed for this account'));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await app.inject({ method: 'POST', url: '/api/model/recognize-bill-image', payload: imageInput });
+    expect(response.statusCode).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('records one static provider failure when DeepSeek rejects the call', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('private-upstream-body', { status: 429 })));
+    const response = await app.inject({ method: 'POST', url: '/api/model/recognize-bill-image', payload: imageInput });
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error.code).toBe('deepseek_http_error');
+    expect(response.body).not.toContain('private-upstream-body');
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ success: false, model: 'mimo-v2.5', errorCode: 'deepseek_http_error' }));
+  });
+
+  it('rejects incomplete model content and records one contract failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ finish_reason: 'length', message: { content: '{"transactions":[' } }],
+    }))));
+    const response = await app.inject({ method: 'POST', url: '/api/model/recognize-bill-image', payload: imageInput });
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error.code).toBe('deepseek_invalid_result');
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ success: false, errorCode: 'deepseek_invalid_result' }));
+  });
 });
 
 const input = { model: 'mimo-v2.5', categories: ['饮料', '其他'], text: '咖啡十八元' };

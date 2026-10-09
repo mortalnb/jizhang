@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from './auth.js';
 import { withModelSlot } from './concurrency.js';
+import { config } from './config.js';
+import { callDeepseekVisionChat } from './deepseek.js';
 import { AppError } from './errors.js';
 import { callMimoChat, extractJsonObject, extractModelContent } from './mimo.js';
 import { buildTransactionPrompt, buildVisionPrompt, normalizeModelBatch, normalizeVisionBatch } from './modelContracts.js';
@@ -90,8 +92,9 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     const endpoint = 'recognize-bill-image';
     await assertModelAccess(auth.userId, input.model, endpoint);
     const startedAt = Date.now();
+    const provider = config.billImageProvider;
     try {
-      const payload = await withModelSlot('image', () => callMimoChat({
+      const body = {
         model: input.model,
         temperature: 0.1,
         top_p: 0.9,
@@ -107,8 +110,11 @@ export const registerModelRoutes = (app: FastifyInstance) => {
             ],
           },
         ],
-      }, request.log, { timeoutMs: 180_000 }));
-      const result = validateModelResult(() => normalizeVisionBatch(parseModelJson(payload), input.categories), request.log, endpoint);
+      };
+      const payload = await withModelSlot('image', () => provider === 'deepseek'
+        ? callDeepseekVisionChat(body, request.log)
+        : callMimoChat(body, request.log, { timeoutMs: 180_000 }));
+      const result = validateModelResult(() => normalizeVisionBatch(parseModelJson(payload), input.categories), request.log, endpoint, provider);
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
     } catch (error) {

@@ -8,7 +8,7 @@ const fields = new Set([
   'sourceLabel', 'insights', 'title', 'body', 'tone',
 ]);
 
-export const validateModelResult = <T>(work: () => T, logger: Pick<FastifyBaseLogger, 'warn'>, endpoint: string) => {
+export const validateModelResult = <T>(work: () => T, logger: Pick<FastifyBaseLogger, 'warn'>, endpoint: string, provider: 'mimo' | 'deepseek' = 'mimo') => {
   try {
     return work();
   } catch (error) {
@@ -21,7 +21,8 @@ export const validateModelResult = <T>(work: () => T, logger: Pick<FastifyBaseLo
       ...('minimum' in issue && typeof issue.minimum === 'number' ? { minimum: issue.minimum } : {}),
     })) : undefined;
     const kind = error instanceof ZodError ? 'schema' : error instanceof SyntaxError ? 'json' : 'content';
-    logger.warn({ event: 'mimo_contract_error', endpoint, kind, issues, issueCount: error instanceof ZodError ? error.issues.length : undefined }, 'MiMo result validation failed');
-    throw new AppError(502, 'mimo_invalid_result', 'MiMo returned a result that does not match the ledger contract');
+    const label = provider === 'deepseek' ? 'DeepSeek' : 'MiMo';
+    logger.warn({ event: `${provider}_contract_error`, endpoint, kind, issues, issueCount: error instanceof ZodError ? error.issues.length : undefined }, `${label} result validation failed`);
+    throw new AppError(502, `${provider}_invalid_result`, `${label} returned a result that does not match the ledger contract`);
   }
 };

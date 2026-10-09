@@ -4,6 +4,12 @@ import { AppError } from './errors.js';
 import { validateModelResult } from './modelValidation.js';
 
 describe('model contract diagnostics', () => {
+  it('identifies the selected image provider without logging its rejected content', () => {
+    const logger = { warn: vi.fn() };
+    expect(() => validateModelResult(() => { throw new SyntaxError('PRIVATE_JSON_FRAGMENT'); }, logger, 'recognize-bill-image', 'deepseek')).toThrowError(expect.objectContaining({ code: 'deepseek_invalid_result' }));
+    expect(logger.warn.mock.calls[0][0]).toMatchObject({ event: 'deepseek_contract_error', endpoint: 'recognize-bill-image', kind: 'json' });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('PRIVATE_');
+  });
   it('logs actionable paths and limits without rejected data or messages', () => {
     const logger = { warn: vi.fn() };
     const schema = z.object({ transactions: z.array(z.object({ description: z.string().max(3), date: z.string() })) });
