@@ -80,7 +80,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           { role: 'system', content: buildTransactionPrompt(input.categories, todayISOChina()) },
           { role: 'user', content: input.text },
         ],
-      }));
+      }, request.log));
       const result = validated(() => normalizeModelBatch(parseModelJson(payload), input.categories));
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
@@ -113,7 +113,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
             ],
           },
         ],
-      }));
+      }, request.log));
       const result = validated(() => normalizeVisionBatch(parseModelJson(payload), input.categories));
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
@@ -134,7 +134,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
         model: input.model,
         messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: input.audioDataUrl } }] }],
         asr_options: { language: input.language },
-      }));
+      }, request.log));
       const text = extractModelContent(payload).trim();
       if (!text) throw new AppError(502, 'mimo_empty_transcript', 'MiMo ASR returned an empty transcript');
       await recordUsage({ audioSeconds: Math.ceil(input.durationSeconds), durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
@@ -164,7 +164,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           },
           { role: 'user', content: JSON.stringify({ financialFacts: input.financialFacts, monthSummaries: input.monthSummaries, recentTransactions: input.recentTransactions, requirements: input.requirements }) },
         ],
-      }));
+      }, request.log));
       const result = validated(() => insightResultSchema.parse(parseModelJson(payload)));
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };
@@ -191,7 +191,7 @@ export const registerModelRoutes = (app: FastifyInstance) => {
           { role: 'system', content: '只返回 JSON：{"text":true,"json":true,"vision":true}。如果无法读取图片，vision 为 false。' },
           { role: 'user', content: [{ type: 'text', text: '确认 JSON 和图片能力。' }, { type: 'image_url', image_url: { url: transparentPixel } }] },
         ],
-      }));
+      }, request.log));
       const parsed = validated(() => parseModelJson(payload)) as Record<string, unknown>;
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result: { ...parsed, audio: true } };

@@ -1,3 +1,4 @@
+import type { FastifyBaseLogger } from 'fastify';
 import { config } from './config.js';
 import { AppError } from './errors.js';
 
@@ -12,7 +13,35 @@ interface ChatRequest {
   stream?: boolean;
 }
 
-export const callMimoChat = async (body: ChatRequest) => {
+const record = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+const tokenCount = (value: unknown) =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+
+const responseMetadata = (payload: unknown) => {
+  const value = record(payload);
+  const choice = record(Array.isArray(value.choices) ? value.choices[0] : undefined);
+  const usage = record(value.usage);
+  const completionDetails = record(usage.completion_tokens_details);
+  return {
+    responseModel: typeof value.model === 'string' && /^[\w.:-]{1,80}$/.test(value.model) ? value.model : undefined,
+    finishReason: typeof choice.finish_reason === 'string' && ['stop', 'length', 'tool_calls', 'content_filter', 'repetition_truncation'].includes(choice.finish_reason) ? choice.finish_reason : undefined,
+    promptTokens: tokenCount(usage.prompt_tokens),
+    completionTokens: tokenCount(usage.completion_tokens),
+    reasoningTokens: tokenCount(completionDetails.reasoning_tokens),
+  };
+};
+
+export const callMimoChat = async (body: ChatRequest, logger?: Pick<FastifyBaseLogger, 'info'>) => {
+  // Authorize the APK's requested name in the route before resolving this alias.
+  const effectiveModel = body.model === 'mimo-v2.5' ? 'mimo-v2.6-flash' : body.model;
+  const upstreamBody = {
+    ...body,
+    model: effectiveModel,
+    ...(effectiveModel === 'mimo-v2.6-flash' ? { thinking: { type: 'disabled' } } : {}),
+  };
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90_000);
   try {
@@ -23,15 +52,24 @@ export const callMimoChat = async (body: ChatRequest) => {
         Authorization: `Bearer ${config.mimoApiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(upstreamBody),
     });
     const text = await response.text();
     if (!response.ok) throw new AppError(502, 'mimo_http_error', `MiMo request failed with HTTP ${response.status}`);
+    let payload: unknown;
     try {
-      return JSON.parse(text) as unknown;
+      payload = JSON.parse(text) as unknown;
     } catch {
       throw new AppError(502, 'mimo_invalid_json', 'MiMo returned invalid JSON');
     }
+    logger?.info({
+      event: 'mimo_response',
+      requestedModel: body.model,
+      effectiveModel,
+      durationMs: Date.now() - startedAt,
+      ...responseMetadata(payload),
+    }, 'MiMo response metadata');
+    return payload;
   } catch (error) {
     if (error instanceof AppError) throw error;
     if (error instanceof Error && error.name === 'AbortError') throw new AppError(504, 'mimo_timeout', 'MiMo request timed out');
