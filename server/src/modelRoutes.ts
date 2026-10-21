@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from './auth.js';
 import { withModelSlot } from './concurrency.js';
 import { config } from './config.js';
+import { prepareBillImage } from './billImageInput.js';
 import { callDeepseekChat } from './deepseek.js';
 import { AppError } from './errors.js';
 import { callMimoChat, extractJsonObject, extractModelContent } from './mimo.js';
@@ -97,26 +98,31 @@ export const registerModelRoutes = (app: FastifyInstance) => {
     const startedAt = Date.now();
     const provider = config.billImageProvider;
     try {
-      const body = {
-        model: input.model,
-        temperature: 0.1,
-        top_p: 0.9,
-        max_completion_tokens: 4096,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: buildVisionPrompt(input.categories, todayISOChina()) },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: '识别这张记账截图，按一次结账与独立订单边界返回 JSON。' },
-              { type: 'image_url', image_url: { url: input.imageDataUrl } },
-            ],
-          },
-        ],
-      };
-      const payload = await withModelSlot('image', () => provider === 'deepseek'
-        ? callDeepseekChat(body, request.log)
-        : callMimoChat(body, request.log, { timeoutMs: 180_000 }));
+      const payload = await withModelSlot('image', async () => {
+        const imageParts = provider === 'deepseek'
+          ? await prepareBillImage(input.imageDataUrl, request.log)
+          : [{ type: 'image_url', image_url: { url: input.imageDataUrl } }];
+        const body = {
+          model: input.model,
+          temperature: 0.1,
+          top_p: 0.9,
+          max_completion_tokens: 4096,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: buildVisionPrompt(input.categories, todayISOChina()) },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: '识别这张记账截图，按一次结账与独立订单边界返回 JSON。' },
+                ...imageParts,
+              ],
+            },
+          ],
+        };
+        return provider === 'deepseek'
+          ? callDeepseekChat(body, request.log)
+          : callMimoChat(body, request.log, { timeoutMs: 180_000 });
+      });
       const result = validateModelResult(() => normalizeVisionBatch(parseModelJson(payload), input.categories), request.log, endpoint, provider);
       await recordUsage({ durationMs: Date.now() - startedAt, endpoint, model: input.model, success: true, userId: auth.userId });
       return { result };

@@ -34,7 +34,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-const imageInput = { model: 'mimo-v2.5', categories: ['饮料', '其他'], imageDataUrl: 'data:image/jpeg;base64,' + 'x'.repeat(100) };
+const imageInput = { model: 'mimo-v2.5', categories: ['饮料', '其他'], imageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=' };
 const visionResponse = () => new Response(JSON.stringify({
   model: 'deepseek-flash', choices: [{ finish_reason: 'stop', message: {
     content: JSON.stringify({ source: 'hema', transactions: [{
