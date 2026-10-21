@@ -144,6 +144,7 @@ describe('batch transaction contract', () => {
     const prompt = buildVisionPrompt(categories, '2026-08-09');
     expect(prompt).toContain('看不到完整日期时省略 date 或返回 null');
     expect(prompt).toContain('不能用今天代替或猜测年份');
+    expect(prompt).toContain('商品生产日期、上市日期、保质期、预约配送时间不能当作消费日期');
     expect(prompt).toContain('1 至 120 字');
     expect(prompt).toContain('父级 detail 最多 1500 字');
     expect(prompt).toContain('商品 detail 最多 1000 字');

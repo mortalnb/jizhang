@@ -140,6 +140,7 @@ export const buildVisionPrompt = (categories: string[], today: string) =>
   `每笔和每项商品的 description 必须是 1 至 120 字的凝练标题；父级 detail 最多 1500 字，商品 detail 最多 1000 字；商品 quantity 是最多 80 字的数量单位字符串。` +
   `紧凑输出 JSON；detail 只补充优惠、包装费或需核对的信息，不重复 description、amount、quantity，其他信息已足够时省略 detail。保留所有可见商品，不为缩短输出删减商品。` +
   `date 只有在截图可明确确定完整日期时才返回 YYYY-MM-DD；看不到完整日期时省略 date 或返回 null，不能用今天代替或猜测年份。已知日期不得返回其他格式。` +
+  `date 专指订单或付款日期；商品生产日期、上市日期、保质期、预约配送时间不能当作消费日期。只有这些日期而没有明确订单或付款日期时，省略 date 或返回 null 并提示核对。` +
   `tag 最多 40 字；merchant 和 orderId 最多 120 字；grouping 只能为 folded 或 separate；每笔 splitItems 最多 250 项，无商品明细时省略或返回空数组。warnings 最多 30 条，每条最多 300 字。` +
   `category 必须属于：${categories.join(', ')}。` +
   `盒马、沃尔玛、山姆或其他超市的一张小票/一次结账必须返回一笔 transaction，grouping=folded，逐商品放入 splitItems；父级 amount 是优惠后的实际支付总额，quantity 保留数量和单位。` +
